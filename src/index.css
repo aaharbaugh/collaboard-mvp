@@ -158,6 +158,12 @@ body {
   color: var(--accent-green);
 }
 
+.board-object-count {
+  font-size: 0.875rem;
+  color: var(--text-secondary, #666);
+  font-weight: 400;
+}
+
 .board-header-right {
   display: flex;
   align-items: center;

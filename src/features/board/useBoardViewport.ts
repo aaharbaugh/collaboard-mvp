@@ -15,6 +15,17 @@ export function useBoardViewport(
   const startPointer = useRef({ x: 0, y: 0 });
   const lastPointer = useRef({ x: 0, y: 0 });
 
+  const pendingWheel = useRef<{ newScale: number; newPos: { x: number; y: number } } | null>(null);
+  const wheelRafId = useRef<number | null>(null);
+
+  const flushWheelUpdate = useCallback(() => {
+    wheelRafId.current = null;
+    const p = pendingWheel.current;
+    if (!p) return;
+    pendingWheel.current = null;
+    setViewport({ x: p.newPos.x, y: p.newPos.y, scale: p.newScale });
+  }, [setViewport]);
+
   const handleWheel = useCallback(
     (e: Konva.KonvaEventObject<WheelEvent>) => {
       e.evt.preventDefault();
@@ -35,9 +46,12 @@ export function useBoardViewport(
         y: e.evt.clientY - rect.top - mousePointTo.y * newScale,
       };
 
-      setViewport({ x: newPos.x, y: newPos.y, scale: newScale });
+      pendingWheel.current = { newScale, newPos };
+      if (wheelRafId.current === null) {
+        wheelRafId.current = requestAnimationFrame(flushWheelUpdate);
+      }
     },
-    [viewport, setViewport, containerRef]
+    [viewport, setViewport, containerRef, flushWheelUpdate]
   );
 
   const handleStageMouseDown = useCallback(

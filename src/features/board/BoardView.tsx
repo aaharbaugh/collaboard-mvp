@@ -78,6 +78,9 @@ export function BoardView() {
       <header className="board-header">
         <div className="board-header-left">
           <h1 className="board-title">CollabBoard</h1>
+          <span className="board-object-count" title="Objects on board">
+            {Object.keys(objects).length} object{Object.keys(objects).length === 1 ? '' : 's'}
+          </span>
         </div>
         <div className="board-header-right">
           <PresenceList cursors={cursors} />
