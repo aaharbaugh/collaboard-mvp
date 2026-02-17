@@ -3,7 +3,7 @@ import type { BoardObject } from '../../../../types/board';
 import { CURSOR_COLORS } from '../../../../lib/constants';
 import { parseLines, computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
 
-interface StickyNoteProps {
+interface TextElementProps {
   obj: BoardObject;
   isSelected: boolean;
   showSelectionBorder?: boolean;
@@ -11,8 +11,16 @@ interface StickyNoteProps {
   zoomScale?: number;
 }
 
-export function StickyNote({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: StickyNoteProps) {
-  const color = obj.color ?? '#f5e6ab';
+/** Text element: same as sticky note but with transparent background. No heading/extra features. */
+export function TextElement({
+  obj,
+  isSelected,
+  showSelectionBorder = true,
+  remoteSelectedBy,
+  zoomScale = 1,
+}: TextElementProps) {
+  if (obj.type !== 'text') return null;
+
   const remoteColor = remoteSelectedBy
     ? CURSOR_COLORS[remoteSelectedBy.length % CURSOR_COLORS.length]
     : undefined;
@@ -24,7 +32,6 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const w = Math.max(0, obj.width);
   const h = Math.max(0, obj.height);
 
-  // Use world-space (box) dimensions so layout is zoom-invariant — no recomputation when zooming
   const { fontSize, padding } = computeAutoFitFontSize(
     rawText,
     Math.max(1, w),
@@ -42,6 +49,8 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const maxLinesThatFit = lineHeight > 0 ? Math.max(1, Math.floor(availH / lineHeight)) : 1;
   const visibleLines = wrappedLines.slice(0, maxLinesThatFit);
 
+  const textColor = obj.color ?? '#1a1a1a';
+
   return (
     <Group
       x={obj.x}
@@ -57,29 +66,26 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
       <Rect
         width={w}
         height={h}
-        fill={color}
+        fill="transparent"
         stroke={showSelectionBorder && isSelected ? '#4a7c59' : remoteColor ?? undefined}
         strokeWidth={hasStroke ? sw : 0}
         dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
         cornerRadius={2 / zoomScale}
       />
-      {showText && (
-        <>
-          {visibleLines.map((lineText, i) => (
-            <Text
-              key={i}
-              x={padding}
-              y={padding + i * lineHeight}
-              width={availW}
-              text={lineText}
-              fontSize={fontSize}
-              fontFamily='"Courier New", Courier, monospace'
-              fill="#2c2416"
-              listening={false}
-            />
-          ))}
-        </>
-      )}
+      {showText &&
+        visibleLines.map((lineText, i) => (
+          <Text
+            key={i}
+            x={padding}
+            y={padding + i * lineHeight}
+            width={availW}
+            text={lineText}
+            fontSize={fontSize}
+            fontFamily='"Courier New", Courier, monospace'
+            fill={textColor}
+            listening={false}
+          />
+        ))}
       {remoteSelectedBy && (
         <Text
           x={0}
@@ -88,6 +94,7 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
           fontSize={10 / zoomScale}
           fontFamily='"Courier New", Courier, monospace'
           fill={remoteColor}
+          listening={false}
         />
       )}
     </Group>

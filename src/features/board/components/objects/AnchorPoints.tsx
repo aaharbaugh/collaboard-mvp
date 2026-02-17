@@ -7,7 +7,7 @@ interface AnchorPointsProps {
   visible: boolean;
   zoomScale: number;
   /** When 'circle', only 4 anchors (top/bottom/left/right) on the circle edge */
-  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image';
+  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text';
   onAnchorMouseDown: (anchor: AnchorPosition) => void;
   onAnchorMouseUp: (anchor: AnchorPosition) => void;
 }

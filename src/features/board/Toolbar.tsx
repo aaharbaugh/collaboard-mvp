@@ -7,6 +7,7 @@ const TOOLS: { mode: ToolMode; label: string; hotkey: string }[] = [
   { mode: 'stickyNote', label: 'Sticky', hotkey: '3' },
   { mode: 'rectangle', label: 'Rect', hotkey: '4' },
   { mode: 'circle', label: 'Circle', hotkey: '5' },
+  { mode: 'text', label: 'Text', hotkey: '6' },
 ];
 
 export function Toolbar() {
@@ -17,8 +18,13 @@ export function Toolbar() {
       const active = document.activeElement?.tagName;
       if (active === 'INPUT' || active === 'TEXTAREA') return;
 
-      const tool = TOOLS.find((t) => t.hotkey === e.key);
+      const isDigitHotkey = (hotkey: string) =>
+        e.key === hotkey ||
+        e.code === `Digit${hotkey}` ||
+        e.code === `Numpad${hotkey}`;
+      const tool = TOOLS.find((t) => isDigitHotkey(t.hotkey));
       if (tool) {
+        e.preventDefault();
         setToolMode(tool.mode);
       }
     };

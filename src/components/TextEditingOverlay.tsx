@@ -1,11 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { BoardObject } from '../types/board';
-import { computeAutoFitFontSize } from '../lib/textParser';
+import { computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../lib/textParser';
 
 interface TextEditingOverlayProps {
   obj: BoardObject | null;
   viewport: { x: number; y: number; scale: number };
-  onSave: (id: string, text: string) => void;
+  onSave: (id: string, text: string, headingLevel?: number) => void;
   onCancel: () => void;
 }
 
@@ -17,10 +17,9 @@ export function TextEditingOverlay({
 }: TextEditingOverlayProps) {
   const [text, setText] = useState(obj?.text ?? '');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
   const openedIdRef = useRef<string | null>(null);
 
-  // Only sync from server when we first open this note (or switch to another). Don't overwrite
-  // local text when obj reference changes due to other Firebase updates (e.g. another user moving something).
   useEffect(() => {
     if (!obj) {
       openedIdRef.current = null;
@@ -33,9 +32,9 @@ export function TextEditingOverlay({
     }
   }, [obj]);
 
-  // Close edit only when visible note has no drawable area (infinite zoom: no scale-based minimum)
+  // Close edit only when visible note/text has no drawable area (infinite zoom: no scale-based minimum)
   useEffect(() => {
-    if (!obj || obj.type !== 'stickyNote') return;
+    if (!obj || (obj.type !== 'stickyNote' && obj.type !== 'text')) return;
     const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
     const sw = obj.width * scale;
     const sh = obj.height * scale;
@@ -71,7 +70,7 @@ export function TextEditingOverlay({
     }, 0);
   }, [text]);
 
-  if (!obj || obj.type !== 'stickyNote') return null;
+  if (!obj || (obj.type !== 'stickyNote' && obj.type !== 'text')) return null;
 
   const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
   const screenX = obj.x * scale + viewport.x;
@@ -83,16 +82,26 @@ export function TextEditingOverlay({
   const { fontSize: rawFontSize, padding: rawPadding } = computeAutoFitFontSize(
     text,
     Math.max(1, screenW),
-    Math.max(1, screenH)
+    Math.max(1, screenH),
   );
-  const screenFontSize = Number.isFinite(rawFontSize) && rawFontSize > 0 ? rawFontSize : minScreenDim * 0.1;
+  let screenFontSize = Number.isFinite(rawFontSize) && rawFontSize > 0 ? rawFontSize : minScreenDim * 0.1;
   const screenPadding = Number.isFinite(rawPadding) && rawPadding >= 0 ? rawPadding : minScreenDim * 0.06;
+  const availW = Math.max(1, screenW - screenPadding * 2);
+  const availH = Math.max(1, screenH - screenPadding * 2);
+  const wrapped = getWrappedLines(text, availW, screenFontSize);
+  const lineCount = Math.max(1, wrapped.length);
+  const maxFontForHeight = availH / (lineCount * LINE_HEIGHT_RATIO);
+  if (screenFontSize > maxFontForHeight) {
+    screenFontSize = Math.max(1, maxFontForHeight);
+  }
 
   if (!Number.isFinite(screenW) || !Number.isFinite(screenH) || screenW < 1 || screenH < 1) {
     return null;
   }
 
-  const handleBlur = () => {
+  const handleBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
+    const next = e.relatedTarget as Node | null;
+    if (toolbarRef.current && next && toolbarRef.current.contains(next)) return;
     onSave(obj.id, text);
     onCancel();
   };
@@ -105,6 +114,7 @@ export function TextEditingOverlay({
   };
 
   const toolbarHeight = 28;
+  const toolbarTop = Math.max(8, screenY - toolbarHeight - 4);
 
   return (
     <div
@@ -120,11 +130,12 @@ export function TextEditingOverlay({
       }}
     >
       <div
+        ref={toolbarRef}
         className="text-edit-toolbar"
         style={{
           position: 'absolute',
           left: screenX,
-          top: screenY - toolbarHeight - 4,
+          top: toolbarTop,
           pointerEvents: 'auto',
         }}
         onMouseDown={(e) => e.preventDefault()}
@@ -175,6 +186,8 @@ export function TextEditingOverlay({
           lineHeight: 1.3,
           resize: 'none',
           overflow: 'auto',
+          whiteSpace: 'pre-wrap',
+          wordWrap: 'break-word',
           pointerEvents: 'auto',
         }}
       />

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle';
+export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle' | 'text';
 
 export interface Viewport {
   x: number;

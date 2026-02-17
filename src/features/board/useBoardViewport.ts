@@ -52,12 +52,23 @@ export function useBoardViewport(
     [toolMode]
   );
 
+  const pendingUpdate = useRef<{ dx: number; dy: number } | null>(null);
+  const rafId = useRef<number | null>(null);
+
+  const flushViewportUpdate = useCallback(() => {
+    rafId.current = null;
+    const pending = pendingUpdate.current;
+    if (!pending) return;
+    pendingUpdate.current = null;
+    const { viewport: prev } = useBoardStore.getState();
+    setViewport({ x: prev.x + pending.dx, y: prev.y + pending.dy });
+  }, [setViewport]);
+
   const handleStageMouseMove = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
       if (!isPanning.current) return;
       const dx = e.evt.clientX - lastPointer.current.x;
       const dy = e.evt.clientY - lastPointer.current.y;
-      setViewport({ x: viewport.x + dx, y: viewport.y + dy });
       lastPointer.current = { x: e.evt.clientX, y: e.evt.clientY };
 
       // Mark as a real pan if moved beyond threshold
@@ -66,13 +77,32 @@ export function useBoardViewport(
       if (Math.abs(totalDx) > PAN_THRESHOLD || Math.abs(totalDy) > PAN_THRESHOLD) {
         didPan.current = true;
       }
+
+      // Batch viewport updates to once per frame to reduce re-renders during pan
+      if (pendingUpdate.current) {
+        pendingUpdate.current.dx += dx;
+        pendingUpdate.current.dy += dy;
+      } else {
+        pendingUpdate.current = { dx, dy };
+        rafId.current = requestAnimationFrame(flushViewportUpdate);
+      }
     },
-    [viewport, setViewport]
+    [flushViewportUpdate]
   );
 
   const handleStageMouseUp = useCallback(() => {
     isPanning.current = false;
-  }, []);
+    if (rafId.current !== null) {
+      cancelAnimationFrame(rafId.current);
+      rafId.current = null;
+    }
+    const pending = pendingUpdate.current;
+    if (pending) {
+      pendingUpdate.current = null;
+      const { viewport: prev } = useBoardStore.getState();
+      setViewport({ x: prev.x + pending.dx, y: prev.y + pending.dy });
+    }
+  }, [setViewport]);
 
   const getPointerPosition = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {

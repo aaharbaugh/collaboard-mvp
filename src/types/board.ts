@@ -1,12 +1,14 @@
 export interface BoardObject {
   id: string;
-  type: 'stickyNote' | 'rectangle' | 'circle' | 'image';
+  type: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text';
   x: number;
   y: number;
   width: number;
   height: number;
   color?: string;
   text?: string;
+  /** For type 'text': heading level 1–6 (1 = largest). Default 1. */
+  headingLevel?: number;
   imageData?: string;
   rotation?: number;
   createdBy: string;

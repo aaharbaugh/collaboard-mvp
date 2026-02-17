@@ -29,12 +29,12 @@ export function BoardView() {
 
   const handleStickyNoteDoubleClick = (id: string) => {
     const obj = objects[id];
-    if (obj?.type !== 'stickyNote') return;
+    if (obj?.type !== 'stickyNote' && obj?.type !== 'text') return;
     setEditingId(id);
   };
 
-  const handleTextSave = (id: string, text: string) => {
-    updateObject(id, { text });
+  const handleTextSave = (id: string, text: string, headingLevel?: number) => {
+    updateObject(id, headingLevel !== undefined ? { text, headingLevel } : { text });
     setEditingId(null);
   };
 

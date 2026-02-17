@@ -3,7 +3,7 @@ import { Layer, Line } from 'react-konva';
 const GRID_SIZE = 50;
 const GRID_EXTENT = 2000;
 
-function useGridLines() {
+const GRID_LINES = (() => {
   const lines: Array<{ id: string; points: number[] }> = [];
   for (let i = -GRID_EXTENT; i <= GRID_EXTENT; i += GRID_SIZE) {
     lines.push({
@@ -16,10 +16,10 @@ function useGridLines() {
     });
   }
   return lines;
-}
+})();
 
 export function GridLayer() {
-  const lines = useGridLines();
+  const lines = GRID_LINES;
 
   return (
     <Layer listening={false}>

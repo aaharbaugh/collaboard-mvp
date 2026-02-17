@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type Konva from 'konva';
 import { Stage, Layer, Group, Arrow, Rect } from 'react-konva';
 import { useContainerSize } from '../../hooks/useContainerSize';
@@ -13,6 +13,7 @@ import { ResizeHandles } from './components/objects/ResizeHandles';
 import { ConnectionLine } from './components/ConnectionLine';
 import {
   STICKY_NOTE_DEFAULTS,
+  TEXT_DEFAULTS,
   SHAPE_DEFAULTS,
   DEFAULT_OBJECT_COLORS,
 } from '../../lib/constants';
@@ -93,25 +94,24 @@ export function BoardCanvas({
   const resizeStart = useRef<{ objId: string; x: number; y: number; w: number; h: number } | null>(null);
   const connectionJustCompleted = useRef(false);
 
-  const allObjects = Object.values(objects);
-  const backObjects = allObjects.filter((obj) => obj.sentToBack === true);
-  const frontObjects = allObjects.filter((obj) => obj.sentToBack !== true);
+  const allObjects = useMemo(() => Object.values(objects), [objects]);
+  const backObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack === true), [allObjects]);
+  const frontObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack !== true), [allObjects]);
 
   const isMultiSelect = selectedIds.length > 1;
-  const selectionBounds = isMultiSelect
-    ? (() => {
-        const selected = selectedIds.map((id) => objects[id]).filter(Boolean) as BoardObjectType[];
-        if (selected.length === 0) return null;
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const obj of selected) {
-          minX = Math.min(minX, obj.x);
-          minY = Math.min(minY, obj.y);
-          maxX = Math.max(maxX, obj.x + obj.width);
-          maxY = Math.max(maxY, obj.y + obj.height);
-        }
-        return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-      })()
-    : null;
+  const selectionBounds = useMemo(() => {
+    if (!isMultiSelect) return null;
+    const selected = selectedIds.map((id) => objects[id]).filter(Boolean) as BoardObjectType[];
+    if (selected.length === 0) return null;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const obj of selected) {
+      minX = Math.min(minX, obj.x);
+      minY = Math.min(minY, obj.y);
+      maxX = Math.max(maxX, obj.x + obj.width);
+      maxY = Math.max(maxY, obj.y + obj.height);
+    }
+    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+  }, [isMultiSelect, selectedIds, objects]);
 
   const clearSelection = useCallback(() => {
     const ids = useBoardStore.getState().selectedIds;
@@ -174,6 +174,16 @@ export function BoardCanvas({
             color: DEFAULT_OBJECT_COLORS.stickyNote,
             text: 'New note',
           });
+        } else if (toolMode === 'text') {
+          createObject({
+            ...base,
+            type: 'text',
+            width: TEXT_DEFAULTS.width / scale,
+            height: TEXT_DEFAULTS.height / scale,
+            color: DEFAULT_OBJECT_COLORS.text,
+            text: 'Text',
+            headingLevel: 1,
+          });
         } else if (toolMode === 'rectangle') {
           createObject({
             ...base,
@@ -233,7 +243,7 @@ export function BoardCanvas({
   const handleObjectDoubleClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>, obj: BoardObjectType) => {
       e.cancelBubble = true;
-      if (obj.type === 'stickyNote') {
+      if (obj.type === 'stickyNote' || obj.type === 'text') {
         onStickyNoteDoubleClick?.(obj.id);
       }
     },

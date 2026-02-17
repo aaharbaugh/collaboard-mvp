@@ -166,7 +166,10 @@ body {
 
 .toolbar {
   display: flex;
+  flex-wrap: wrap;
   gap: 0.25rem;
+  justify-content: center;
+  max-width: calc(100% - 2rem);
   background: var(--bg-card);
   border: 2px solid var(--border-color);
   border-radius: 2px;

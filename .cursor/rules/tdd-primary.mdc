@@ -1,0 +1,58 @@
+---
+description: Test-driven development (TDD) is the primary method; write tests first, then implement.
+alwaysApply: true
+---
+
+# Test-Driven Development (TDD)
+
+TDD is the default workflow for this project. **Write the test first, then implement the code** so the test passes.
+
+## Workflow
+
+1. **Red**: Write a failing test that describes the desired behavior.
+2. **Green**: Implement the minimum code to make the test pass.
+3. **Refactor**: Clean up while keeping tests green.
+
+## By artifact type
+
+### Frontend components (React/TSX)
+
+- Create `ComponentName.test.tsx` (or `.spec.tsx`) **first**, next to or in the same directory as the component.
+- Test: rendering, props, user interactions, accessibility where relevant.
+- Then implement `ComponentName.tsx` to satisfy the tests.
+
+```text
+# Example order
+src/features/board/components/StickyNote.test.tsx  ← write first
+src/features/board/components/StickyNote.tsx       ← then implement
+```
+
+### Hooks and utilities
+
+- Create `useMyHook.test.ts` or `myUtil.test.ts` first.
+- Test inputs, outputs, and edge cases.
+- Then implement the hook or utility.
+
+### API routes / endpoints
+
+- Create an integration or route test first (e.g. `boards.api.test.ts`).
+- Test: method, path, request body, response status and shape, error cases.
+- Then implement the route/handler.
+
+### Backend or shared services
+
+- Create unit tests for the public interface first.
+- Then implement the service/function.
+
+## Conventions
+
+- **Colocate**: Prefer tests next to the code they cover (`Component.test.tsx` beside `Component.tsx`).
+- **Naming**: Use `.test.ts(x)` or `.spec.ts(x)` so the test runner picks them up.
+- **One concern per test**: Each test should assert one behavior or scenario.
+- When adding a **new feature**, add or extend tests before (or in the same change as) the implementation. When **fixing a bug**, add a failing test that reproduces the bug, then fix.
+
+## If no test framework is set up
+
+- Prefer **Vitest** for this Vite/React project (`npm i -D vitest @testing-library/react @testing-library/jest-dom jsdom`).
+- Add a `test` script in `package.json` and configure `vitest.config.ts` if needed.
+- For API/backend tests, use the same runner or a dedicated integration test setup.
