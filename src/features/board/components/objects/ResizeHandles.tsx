@@ -7,6 +7,8 @@ interface ResizeHandlesProps {
   width: number;
   height: number;
   zoomScale: number;
+  /** When 'circle', handles wrap the circle's bounding square (centered, size = min(w,h)) */
+  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image';
   onResizeStart: (corner: Corner) => void;
   onResizeMove: (corner: Corner, e: Konva.KonvaEventObject<DragEvent>) => void;
   onResizeEnd: (corner: Corner, e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -23,27 +25,36 @@ export function ResizeHandles({
   width,
   height,
   zoomScale,
+  objectType,
   onResizeStart,
   onResizeMove,
   onResizeEnd,
 }: ResizeHandlesProps) {
-  const size = 8 / zoomScale;
+  const size = 10 / zoomScale;
   const half = size / 2;
+
+  const isCircle = objectType === 'circle';
+  const boxW = isCircle ? Math.min(width, height) : width;
+  const boxH = isCircle ? Math.min(width, height) : height;
+  const boxX = isCircle ? (width - boxW) / 2 : 0;
+  const boxY = isCircle ? (height - boxH) / 2 : 0;
 
   return (
     <>
       {CORNERS.map(({ corner, getXY, cursor }) => {
-        const { x, y } = getXY(width, height);
+        const { x, y } = getXY(boxW, boxH);
+        const handleX = boxX + x;
+        const handleY = boxY + y;
         return (
           <Rect
             key={corner}
-            x={x - half}
-            y={y - half}
+            x={handleX - half}
+            y={handleY - half}
             width={size}
             height={size}
-            fill="#fff"
-            stroke="#4a7c59"
-            strokeWidth={1 / zoomScale}
+            fill="#2d5a3a"
+            stroke="#fff"
+            strokeWidth={2 / zoomScale}
             draggable
             onMouseEnter={(e) => {
               const stage = e.target.getStage();

@@ -50,9 +50,13 @@ export function ConnectionLine({
   const ptrLen = 10 / zoomScale;
   const ptrW = 8 / zoomScale;
 
-  // Hide arrow if pointer would be larger than the smallest object edge
-  const minEdge = Math.min(fromObj.width, fromObj.height, toObj.width, toObj.height);
-  if (ptrLen > minEdge) return null;
+  // Only hide when the larger node is too small on screen: use each node's biggest dimension in px, then the max of the two
+  const fromPx = Math.max(fromObj.width * zoomScale, fromObj.height * zoomScale);
+  const toPx = Math.max(toObj.width * zoomScale, toObj.height * zoomScale);
+  const maxNodePx = Math.max(fromPx, toPx);
+  if (maxNodePx < 10) return null;
+
+  const destinationTiny = toPx < 14; // destination node small on screen → hide arrowhead only
 
   // Normalize waypoints: ensure we have a real array of pairs (x,y); empty/undefined = 0-waypoint arrow
   const rawPoints = connection.points;
@@ -62,7 +66,6 @@ export function ConnectionLine({
       : [];
 
   // For 0-waypoint arrows, use exactly [from, to] so the line goes straight to the destination.
-  // Spreading waypoints when empty can avoid any edge cases with Konva's Arrow and 2-point lines.
   const allPoints =
     waypoints.length === 0
       ? [from.x, from.y, to.x, to.y]
@@ -120,8 +123,8 @@ export function ConnectionLine({
         stroke={isSelected ? '#4a7c59' : (connection.color ?? '#6b5d4d')}
         fill={isSelected ? '#4a7c59' : (connection.color ?? '#6b5d4d')}
         strokeWidth={sw}
-        pointerLength={ptrLen}
-        pointerWidth={ptrW}
+        pointerLength={destinationTiny ? 0 : ptrLen}
+        pointerWidth={destinationTiny ? 0 : ptrW}
         hitStrokeWidth={12 / zoomScale}
         onClick={handleClick}
         onTap={handleClick}
