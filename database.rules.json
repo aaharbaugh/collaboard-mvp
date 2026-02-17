@@ -1,0 +1,16 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "boards": {
+      "demo": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      },
+      "$boardId": {
+        ".read": "auth != null && (!data.exists() || data.child('metadata/owner').val() === auth.uid || data.child('collaborators').child(auth.uid).exists())",
+        ".write": "auth != null && ((!data.exists() && newData.child('metadata/owner').val() === auth.uid) || (data.exists() && (data.child('metadata/owner').val() === auth.uid || data.child('collaborators').child(auth.uid).exists())))"
+      }
+    }
+  }
+}

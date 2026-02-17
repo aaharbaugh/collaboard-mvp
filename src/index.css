@@ -1,0 +1,427 @@
+/* Retro terminal design system */
+:root {
+  --bg-parchment: #f4f0e8;
+  --bg-card: #ebe7dd;
+  --accent-green: #4a7c59;
+  --accent-amber: #8b6914;
+  --text-primary: #2c2416;
+  --text-muted: #6b5d4d;
+  --border-color: #2c2416;
+  --border-light: rgba(44, 36, 22, 0.25);
+  --grid-line: rgba(80, 70, 55, 0.12);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "Courier New", "Courier", monospace;
+  background: var(--bg-parchment);
+  color: var(--text-primary);
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+/* Auth */
+.auth-loading,
+.board-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  gap: 1rem;
+}
+
+.auth-loading-spinner {
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 1.25rem;
+  color: var(--accent-green);
+}
+
+.auth-loading-spinner::after {
+  content: "[ loading... ]";
+  animation: blink 1s step-end infinite;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+.auth-sign-in {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+}
+
+.auth-sign-in-card {
+  background: var(--bg-card);
+  border: 2px solid var(--border-color);
+  border-radius: 2px;
+  padding: 2rem 3rem;
+  text-align: center;
+}
+
+.auth-sign-in-card h1 {
+  margin: 0 0 0.5rem;
+  font-size: 2rem;
+  color: var(--accent-green);
+}
+
+.auth-sign-in-card p {
+  margin: 0 0 1.5rem;
+  color: var(--text-muted);
+}
+
+.btn-primary {
+  background: var(--bg-card);
+  color: var(--text-primary);
+  border: 2px solid var(--accent-green);
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: "Courier New", "Courier", monospace;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.btn-primary:hover {
+  background: var(--accent-green);
+  color: var(--bg-parchment);
+}
+
+.btn-primary:active {
+  opacity: 0.8;
+}
+
+.auth-sign-in-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.btn-secondary {
+  background: transparent;
+  color: var(--text-primary);
+  border: 2px solid var(--border-color);
+  padding: 0.75rem 1.5rem;
+  font-size: 1rem;
+  font-weight: 600;
+  font-family: "Courier New", "Courier", monospace;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.btn-secondary:hover {
+  border-color: var(--accent-green);
+  background: rgba(74, 124, 89, 0.1);
+}
+
+.btn-secondary:active {
+  opacity: 0.8;
+}
+
+/* Board layout */
+.board-layout {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.5rem 1rem;
+  background: var(--bg-card);
+  border-bottom: 2px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.board-header-left {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+}
+
+.board-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--accent-green);
+}
+
+.board-header-right {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.toolbar {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--bg-card);
+  border: 2px solid var(--border-color);
+  border-radius: 2px;
+  padding: 0.25rem;
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+}
+
+.toolbar-btn {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  font-family: "Courier New", "Courier", monospace;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toolbar-btn:hover {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.toolbar-btn.active {
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: var(--bg-parchment);
+}
+
+.toolbar-btn .hotkey {
+  font-size: 0.7rem;
+  opacity: 0.6;
+  margin-right: 0.25rem;
+}
+
+/* Presence */
+.presence-list {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.presence-label {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.presence-empty {
+  font-size: 0.875rem;
+}
+
+.presence-avatars {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.presence-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--bg-parchment);
+  border: 2px solid;
+}
+
+/* User menu */
+.user-menu {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.user-name {
+  font-size: 0.875rem;
+}
+
+.btn-sign-out {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  padding: 0.4rem 0.75rem;
+  font-size: 0.875rem;
+  font-family: "Courier New", "Courier", monospace;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-sign-out:hover {
+  border-color: var(--accent-amber);
+  color: var(--accent-amber);
+}
+
+/* Text editing overlay */
+.text-editing-input {
+  background: var(--bg-card);
+  border: 2px dashed var(--accent-green);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-family: "Courier New", "Courier", monospace;
+  padding: 0;
+  resize: none;
+}
+
+.text-editing-input:focus {
+  outline: none;
+}
+
+.text-edit-toolbar {
+  display: flex;
+  gap: 2px;
+  background: var(--bg-card);
+  border: 2px solid var(--border-color);
+  border-radius: 2px;
+  padding: 2px;
+}
+
+.text-edit-btn {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-primary);
+  padding: 2px 8px;
+  font-size: 0.75rem;
+  font-family: "Courier New", "Courier", monospace;
+  font-weight: 700;
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.text-edit-btn:hover {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+/* Board canvas */
+.board-main {
+  flex: 1;
+  min-height: 0;
+}
+
+.board-canvas-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.board-container {
+  width: 100%;
+  height: 100%;
+}
+
+.board-container canvas {
+  display: block;
+}
+
+.board-error-message {
+  margin: 0 0 0.5rem;
+  font-weight: 600;
+}
+
+.board-error-detail {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  max-width: 360px;
+  text-align: center;
+}
+
+/* Cursor overlay */
+.cursor-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.cursor-item {
+  position: absolute;
+}
+
+.cursor-label {
+  position: absolute;
+  left: 20px;
+  top: 0;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: "Courier New", "Courier", monospace;
+  color: var(--bg-parchment);
+  white-space: nowrap;
+  margin-left: 4px;
+}
+
+/* Selection tools (color picker + order buttons) */
+.selection-tools {
+  position: absolute;
+  bottom: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.object-order-buttons {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.object-order-buttons .toolbar-btn {
+  padding: 0.35rem 0.5rem;
+  font-size: 0.8rem;
+}
+
+/* Color picker */
+.color-picker {
+  display: flex;
+  gap: 0.25rem;
+  background: var(--bg-card);
+  border: 2px solid var(--border-color);
+  border-radius: 2px;
+  padding: 0.25rem;
+}
+
+.color-swatch {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--border-light);
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0;
+  transition: border-color 0.15s, transform 0.1s;
+}
+
+.color-swatch:hover {
+  border-color: var(--accent-green);
+  transform: scale(1.15);
+}
+
+.color-swatch.active {
+  border-color: var(--accent-green);
+  box-shadow: 0 0 0 1px var(--accent-green);
+}
