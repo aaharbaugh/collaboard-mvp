@@ -17,9 +17,17 @@ export function TextEditingOverlay({
 }: TextEditingOverlayProps) {
   const [text, setText] = useState(obj?.text ?? '');
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const openedIdRef = useRef<string | null>(null);
 
+  // Only sync from server when we first open this note (or switch to another). Don't overwrite
+  // local text when obj reference changes due to other Firebase updates (e.g. another user moving something).
   useEffect(() => {
-    if (obj) {
+    if (!obj) {
+      openedIdRef.current = null;
+      return;
+    }
+    if (openedIdRef.current !== obj.id) {
+      openedIdRef.current = obj.id;
       setText(obj.text ?? '');
       setTimeout(() => inputRef.current?.focus(), 0);
     }

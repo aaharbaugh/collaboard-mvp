@@ -5,18 +5,19 @@ import { CURSOR_COLORS } from '../../../../lib/constants';
 interface RectangleProps {
   obj: BoardObject;
   isSelected: boolean;
+  showSelectionBorder?: boolean;
   remoteSelectedBy?: string;
   zoomScale?: number;
 }
 
-export function Rectangle({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }: RectangleProps) {
+export function Rectangle({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: RectangleProps) {
   const color = obj.color ?? '#d4e4bc';
   const remoteColor = remoteSelectedBy
     ? CURSOR_COLORS[remoteSelectedBy.length % CURSOR_COLORS.length]
     : undefined;
 
   const sw = 2 / zoomScale;
-  const hasStroke = isSelected || !!remoteSelectedBy;
+  const hasStroke = (showSelectionBorder && isSelected) || !!remoteSelectedBy;
 
   return (
     <Group>
@@ -26,9 +27,9 @@ export function Rectangle({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }: 
         width={obj.width}
         height={obj.height}
         fill={color}
-        stroke={isSelected ? '#4a7c59' : remoteColor ?? undefined}
+        stroke={showSelectionBorder && isSelected ? '#4a7c59' : remoteColor ?? undefined}
         strokeWidth={hasStroke ? sw : 0}
-        dash={isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
+        dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
         rotation={obj.rotation ?? 0}
       />
       {remoteSelectedBy && (

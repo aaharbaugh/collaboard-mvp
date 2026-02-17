@@ -46,9 +46,16 @@ export function useBoardSync(boardId: string | null) {
   const updateObject = useCallback(
     (id: string, updates: Partial<BoardObject>) => {
       if (!boardId) return;
+      // Only send defined fields so we never overwrite or clear other users' state (e.g. selectedBy).
+      // Firebase update() merges at the path; omitting a key leaves it unchanged.
+      const payload: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(updates)) {
+        if (value !== undefined) payload[key] = value;
+      }
+      if (Object.keys(payload).length === 0) return;
       update(
         ref(database, `boards/${boardId}/objects/${id}`),
-        updates
+        payload
       ).catch(console.error);
     },
     [boardId]
@@ -78,9 +85,14 @@ export function useBoardSync(boardId: string | null) {
   const updateConnection = useCallback(
     (id: string, updates: Partial<Connection>) => {
       if (!boardId) return;
+      const payload: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(updates)) {
+        if (value !== undefined) payload[key] = value;
+      }
+      if (Object.keys(payload).length === 0) return;
       update(
         ref(database, `boards/${boardId}/connections/${id}`),
-        updates
+        payload
       ).catch(console.error);
     },
     [boardId]

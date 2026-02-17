@@ -5,11 +5,12 @@ import { CURSOR_COLORS } from '../../../../lib/constants';
 interface CircleProps {
   obj: BoardObject;
   isSelected: boolean;
+  showSelectionBorder?: boolean;
   remoteSelectedBy?: string;
   zoomScale?: number;
 }
 
-export function Circle({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }: CircleProps) {
+export function Circle({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: CircleProps) {
   const color = obj.color ?? '#c5d5e8';
   const radius = Math.min(obj.width, obj.height) / 2;
   const remoteColor = remoteSelectedBy
@@ -17,7 +18,7 @@ export function Circle({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }: Cir
     : undefined;
 
   const sw = 2 / zoomScale;
-  const hasStroke = isSelected || !!remoteSelectedBy;
+  const hasStroke = (showSelectionBorder && isSelected) || !!remoteSelectedBy;
 
   return (
     <Group>
@@ -26,9 +27,9 @@ export function Circle({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }: Cir
         y={obj.y + obj.height / 2}
         radius={radius}
         fill={color}
-        stroke={isSelected ? '#4a7c59' : remoteColor ?? undefined}
+        stroke={showSelectionBorder && isSelected ? '#4a7c59' : remoteColor ?? undefined}
         strokeWidth={hasStroke ? sw : 0}
-        dash={isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
+        dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
       />
       {remoteSelectedBy && (
         <Text

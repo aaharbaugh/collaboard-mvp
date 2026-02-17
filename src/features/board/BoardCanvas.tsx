@@ -97,6 +97,22 @@ export function BoardCanvas({
   const backObjects = allObjects.filter((obj) => obj.sentToBack === true);
   const frontObjects = allObjects.filter((obj) => obj.sentToBack !== true);
 
+  const isMultiSelect = selectedIds.length > 1;
+  const selectionBounds = isMultiSelect
+    ? (() => {
+        const selected = selectedIds.map((id) => objects[id]).filter(Boolean) as BoardObjectType[];
+        if (selected.length === 0) return null;
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const obj of selected) {
+          minX = Math.min(minX, obj.x);
+          minY = Math.min(minY, obj.y);
+          maxX = Math.max(maxX, obj.x + obj.width);
+          maxY = Math.max(maxY, obj.y + obj.height);
+        }
+        return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+      })()
+    : null;
+
   const clearSelection = useCallback(() => {
     const ids = useBoardStore.getState().selectedIds;
     ids.forEach((id) => {
@@ -710,7 +726,8 @@ export function BoardCanvas({
           {/* Objects sent to back (behind arrows) */}
           {backObjects.map((obj) => {
             const isSelected = selectedIds.includes(obj.id);
-            const showAnchors = hoveredObjectId === obj.id || isSelected;
+            const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
+            const showSelectionBorder = isSelected && !isMultiSelect;
             return (
               <Group
                 key={obj.id}
@@ -734,6 +751,7 @@ export function BoardCanvas({
                 <BoardObject
                   obj={{ ...obj, x: 0, y: 0 }}
                   isSelected={isSelected}
+                  showSelectionBorder={showSelectionBorder}
                   remoteSelectedBy={obj.selectedBy && obj.selectedBy !== userId ? (obj.selectedByName ?? undefined) : undefined}
                   zoomScale={viewport.scale}
                 />
@@ -746,7 +764,7 @@ export function BoardCanvas({
                   onAnchorMouseDown={(anchor) => handleAnchorMouseDown(obj.id, anchor)}
                   onAnchorMouseUp={(anchor) => handleAnchorMouseUp(obj.id, anchor)}
                 />
-                {isSelected && (
+                {isSelected && !isMultiSelect && (
                   <ResizeHandles
                     width={obj.width}
                     height={obj.height}
@@ -793,7 +811,8 @@ export function BoardCanvas({
           {/* Objects in front (above arrows) */}
           {frontObjects.map((obj) => {
             const isSelected = selectedIds.includes(obj.id);
-            const showAnchors = hoveredObjectId === obj.id || isSelected;
+            const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
+            const showSelectionBorder = isSelected && !isMultiSelect;
             return (
               <Group
                 key={obj.id}
@@ -817,6 +836,7 @@ export function BoardCanvas({
                 <BoardObject
                   obj={{ ...obj, x: 0, y: 0 }}
                   isSelected={isSelected}
+                  showSelectionBorder={showSelectionBorder}
                   remoteSelectedBy={obj.selectedBy && obj.selectedBy !== userId ? (obj.selectedByName ?? undefined) : undefined}
                   zoomScale={viewport.scale}
                 />
@@ -829,7 +849,7 @@ export function BoardCanvas({
                   onAnchorMouseDown={(anchor) => handleAnchorMouseDown(obj.id, anchor)}
                   onAnchorMouseUp={(anchor) => handleAnchorMouseUp(obj.id, anchor)}
                 />
-                {isSelected && (
+                {isSelected && !isMultiSelect && (
                   <ResizeHandles
                     width={obj.width}
                     height={obj.height}
@@ -842,6 +862,21 @@ export function BoardCanvas({
               </Group>
             );
           })}
+
+          {/* Multi-select: single bounding box around entire selection */}
+          {selectionBounds && (
+            <Rect
+              x={selectionBounds.x}
+              y={selectionBounds.y}
+              width={selectionBounds.width}
+              height={selectionBounds.height}
+              fill="rgba(74, 124, 89, 0.06)"
+              stroke="#4a7c59"
+              strokeWidth={2 / viewport.scale}
+              dash={[6 / viewport.scale, 3 / viewport.scale]}
+              listening={false}
+            />
+          )}
 
           {/* Area selection rectangle */}
           {selectionRect && (

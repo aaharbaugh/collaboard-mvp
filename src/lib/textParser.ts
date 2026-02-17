@@ -42,13 +42,13 @@ export function computeAutoFitFontSize(
   height: number,
 ): { fontSize: number; padding: number } {
   const minDim = Math.min(width, height);
-  const padding = Math.max(2, minDim * 0.06);
-  const availW = width - padding * 2;
-  const availH = height - padding * 2;
+  const padding = Math.min(minDim * 0.5, Math.max(1, minDim * 0.06));
+  const availW = Math.max(1, width - padding * 2);
+  const availH = Math.max(1, height - padding * 2);
 
   if (availW <= 0 || availH <= 0) {
-    const fallback = Math.max(6, minDim * 0.08);
-    return { fontSize: fallback, padding };
+    const fallback = Math.max(8, minDim * 0.1);
+    return { fontSize: fallback, padding: Math.min(padding, minDim / 2) };
   }
 
   const lines = parseLines(text ?? '');
@@ -63,8 +63,8 @@ export function computeAutoFitFontSize(
 
   let fontSize = Math.min(fontSizeByHeight, fontSizeByWidth);
 
-  // Clamp: small boxes get proportionally smaller min; cap max so text doesn't blow up
-  const minFont = Math.max(6, minDim * 0.06);
+  // Clamp: ensure readable min (8px) for small objects; cap max so text doesn't blow up
+  const minFont = Math.max(8, minDim * 0.08);
   const maxFont = Math.min(minDim * 0.28, availH * 0.5);
   fontSize = Math.max(minFont, Math.min(maxFont, fontSize));
 

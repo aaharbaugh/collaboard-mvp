@@ -6,11 +6,12 @@ import { CURSOR_COLORS } from '../../../../lib/constants';
 interface ImageObjectProps {
   obj: BoardObject;
   isSelected: boolean;
+  showSelectionBorder?: boolean;
   remoteSelectedBy?: string;
   zoomScale?: number;
 }
 
-export function ImageObject({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }: ImageObjectProps) {
+export function ImageObject({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: ImageObjectProps) {
   const [image, setImage] = useState<HTMLImageElement | null>(null);
 
   useEffect(() => {
@@ -25,7 +26,7 @@ export function ImageObject({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }
     : undefined;
 
   const sw = 2 / zoomScale;
-  const hasStroke = isSelected || !!remoteSelectedBy;
+  const hasStroke = (showSelectionBorder && isSelected) || !!remoteSelectedBy;
 
   return (
     <Group>
@@ -45,9 +46,9 @@ export function ImageObject({ obj, isSelected, remoteSelectedBy, zoomScale = 1 }
           y={obj.y}
           width={obj.width}
           height={obj.height}
-          stroke={isSelected ? '#4a7c59' : remoteColor ?? undefined}
+          stroke={showSelectionBorder && isSelected ? '#4a7c59' : remoteColor ?? undefined}
           strokeWidth={sw}
-          dash={isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
+          dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
           fill="transparent"
           rotation={obj.rotation ?? 0}
         />
