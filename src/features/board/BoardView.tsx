@@ -8,7 +8,7 @@ import { PresenceList } from '../../components/PresenceList';
 import { useBoardStore } from '../../lib/store';
 import { useCursorSync } from '../sync/useCursorSync';
 import { useBoardSync } from '../sync/useBoardSync';
-import { TextEditingOverlay, MIN_STICKY_EDIT_SIZE_PX } from '../../components/TextEditingOverlay';
+import { TextEditingOverlay } from '../../components/TextEditingOverlay';
 import { ColorPicker } from './components/ColorPicker';
 
 export function BoardView() {
@@ -30,8 +30,6 @@ export function BoardView() {
   const handleStickyNoteDoubleClick = (id: string) => {
     const obj = objects[id];
     if (obj?.type !== 'stickyNote') return;
-    const minScreenDim = Math.min(obj.width * viewport.scale, obj.height * viewport.scale);
-    if (minScreenDim < MIN_STICKY_EDIT_SIZE_PX) return;
     setEditingId(id);
   };
 

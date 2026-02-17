@@ -2,8 +2,6 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { BoardObject } from '../types/board';
 import { computeAutoFitFontSize } from '../lib/textParser';
 
-export const MIN_STICKY_EDIT_SIZE_PX = 24; // hide edit overlay when note smaller than this on screen
-
 interface TextEditingOverlayProps {
   obj: BoardObject | null;
   viewport: { x: number; y: number; scale: number };
@@ -35,14 +33,13 @@ export function TextEditingOverlay({
     }
   }, [obj]);
 
-  // Close edit mode when note becomes too small on screen (e.g. after zoom out)
+  // Close edit only when visible note has no drawable area (infinite zoom: no scale-based minimum)
   useEffect(() => {
     if (!obj || obj.type !== 'stickyNote') return;
-    const minScreenDim = Math.min(
-      obj.width * viewport.scale,
-      obj.height * viewport.scale
-    );
-    if (minScreenDim < MIN_STICKY_EDIT_SIZE_PX) onCancel();
+    const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
+    const sw = obj.width * scale;
+    const sh = obj.height * scale;
+    if (!Number.isFinite(sw) || !Number.isFinite(sh) || sw < 1 || sh < 1) onCancel();
   }, [obj, viewport.scale, viewport.x, viewport.y, onCancel]);
 
   const wrapSelection = useCallback((before: string, after: string) => {
@@ -76,19 +73,24 @@ export function TextEditingOverlay({
 
   if (!obj || obj.type !== 'stickyNote') return null;
 
-  const screenX = obj.x * viewport.scale + viewport.x;
-  const screenY = obj.y * viewport.scale + viewport.y;
-  const screenW = obj.width * viewport.scale;
-  const screenH = obj.height * viewport.scale;
+  const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
+  const screenX = obj.x * scale + viewport.x;
+  const screenY = obj.y * scale + viewport.y;
+  const screenW = obj.width * scale;
+  const screenH = obj.height * scale;
 
-  // Same as view mode: hide edit when note is too small on screen
   const minScreenDim = Math.min(screenW, screenH);
-  if (minScreenDim < MIN_STICKY_EDIT_SIZE_PX) {
+  const { fontSize: rawFontSize, padding: rawPadding } = computeAutoFitFontSize(
+    text,
+    Math.max(1, screenW),
+    Math.max(1, screenH)
+  );
+  const screenFontSize = Number.isFinite(rawFontSize) && rawFontSize > 0 ? rawFontSize : minScreenDim * 0.1;
+  const screenPadding = Number.isFinite(rawPadding) && rawPadding >= 0 ? rawPadding : minScreenDim * 0.06;
+
+  if (!Number.isFinite(screenW) || !Number.isFinite(screenH) || screenW < 1 || screenH < 1) {
     return null;
   }
-
-  const { fontSize: worldFontSize } = computeAutoFitFontSize(text, obj.width, obj.height);
-  const screenFontSize = Math.max(12, worldFontSize * viewport.scale);
 
   const handleBlur = () => {
     onSave(obj.id, text);
@@ -159,17 +161,20 @@ export function TextEditingOverlay({
         onKeyDown={handleKeyDown}
         style={{
           position: 'absolute',
-          left: screenX,
-          top: screenY,
-          width: screenW,
-          height: screenH,
+          left: screenX + screenPadding,
+          top: screenY + screenPadding,
+          width: Math.max(1, screenW - screenPadding * 2),
+          height: Math.max(1, screenH - screenPadding * 2),
           boxSizing: 'border-box',
-          padding: 4,
+          padding: 0,
           margin: 0,
-          border: '1px solid #4a7c59',
-          borderRadius: 2,
+          border: '1px solid rgba(74,124,89,0.5)',
+          borderRadius: Math.max(0, Math.min(8, minScreenDim * 0.02)),
+          fontFamily: '"Courier New", Courier, monospace',
           fontSize: screenFontSize,
           lineHeight: 1.3,
+          resize: 'none',
+          overflow: 'auto',
           pointerEvents: 'auto',
         }}
       />

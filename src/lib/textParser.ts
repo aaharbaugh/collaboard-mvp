@@ -29,44 +29,92 @@ export function parseLines(raw: string): ParsedLine[] {
   });
 }
 
-const LINE_HEIGHT_RATIO = 1.3;
+export const LINE_HEIGHT_RATIO = 1.3;
 const CHAR_ASPECT = 0.6; // monospace width vs height
 
 /**
- * Computes fontSize and padding so text fills the box: uses actual line count
- * and max line length. Smaller boxes get proportionally smaller text.
+ * Same wrapping model as computeAutoFitFontSize. Returns lines so view and edit
+ * use identical line breaks when width/font are in the same units.
+ */
+export function getWrappedLines(
+  text: string,
+  widthPx: number,
+  fontSizePx: number
+): string[] {
+  if (!text || widthPx <= 0 || fontSizePx <= 0) return [];
+  const charWidth = fontSizePx * CHAR_ASPECT;
+  const maxCharsPerLine = Math.max(1, Math.floor(widthPx / charWidth));
+  const lines: string[] = [];
+  const paragraphs = (text ?? '').split('\n');
+  for (const para of paragraphs) {
+    const words = para.split(/(\s+)/);
+    let line = '';
+    let lineLen = 0;
+    for (const word of words) {
+      const isSpace = /^\s+$/.test(word);
+      const wordLen = word.length;
+      if (lineLen + wordLen <= maxCharsPerLine || lineLen === 0) {
+        line += word;
+        lineLen += wordLen;
+      } else {
+        if (line.trim().length > 0) lines.push(line.trimEnd());
+        if (isSpace) {
+          line = '';
+          lineLen = 0;
+        } else {
+          line = word;
+          lineLen = wordLen;
+        }
+      }
+    }
+    if (line.trim().length > 0) lines.push(line.trimEnd());
+  }
+  return lines.length > 0 ? lines : [''];
+}
+
+/**
+ * Computes fontSize and padding so text fits the given box.
+ * Width/height are in whatever units the caller uses (e.g. screen px or world units).
+ * Returns fontSize and padding in the same units. No hardcoded minimums — purely
+ * based on the box size so it works with infinite zoom (caller passes visible size).
+ *
+ * For tall/narrow boxes, estimates wrapped line count so text shrinks and wraps
+ * to fit both dimensions. Other objects (handles, strokes, anchors) should follow
+ * the same approach: size from viewport/visible dimensions, not fixed px.
  */
 export function computeAutoFitFontSize(
   text: string,
   width: number,
   height: number,
 ): { fontSize: number; padding: number } {
-  const minDim = Math.min(width, height);
-  const padding = Math.min(minDim * 0.5, Math.max(1, minDim * 0.06));
-  const availW = Math.max(1, width - padding * 2);
-  const availH = Math.max(1, height - padding * 2);
-
-  if (availW <= 0 || availH <= 0) {
-    const fallback = Math.max(8, minDim * 0.1);
-    return { fontSize: fallback, padding: Math.min(padding, minDim / 2) };
-  }
+  const w = Math.max(0.5, Number.isFinite(width) ? width : 1);
+  const h = Math.max(0.5, Number.isFinite(height) ? height : 1);
+  const minDim = Math.min(w, h);
+  const padding = Math.min(minDim * 0.5, Math.max(minDim * 0.02, minDim * 0.06));
+  const availW = Math.max(0.5, w - padding * 2);
+  const availH = Math.max(0.5, h - padding * 2);
 
   const lines = parseLines(text ?? '');
   const lineTexts = lines.map((l) => l.text);
-  const numLines = Math.max(1, lineTexts.length);
   const maxLineLen = Math.max(1, ...lineTexts.map((s) => s.length));
 
-  // Font size that fits by height (all lines)
-  const fontSizeByHeight = availH / (numLines * LINE_HEIGHT_RATIO);
-  // Font size that fits by width (longest line in monospace)
   const fontSizeByWidth = availW / (maxLineLen * CHAR_ASPECT);
 
-  let fontSize = Math.min(fontSizeByHeight, fontSizeByWidth);
+  const charsPerLineAtWidth = Math.max(1, fontSizeByWidth > 0 ? availW / (fontSizeByWidth * CHAR_ASPECT) : 1);
+  const wrappedLineCount = lineTexts.reduce(
+    (sum, line) => sum + Math.max(1, Math.ceil(line.length / charsPerLineAtWidth)),
+    0
+  );
+  const fontSizeByHeightWrapped = wrappedLineCount > 0 ? availH / (wrappedLineCount * LINE_HEIGHT_RATIO) : fontSizeByWidth;
 
-  // Clamp: ensure readable min (8px) for small objects; cap max so text doesn't blow up
-  const minFont = Math.max(8, minDim * 0.08);
-  const maxFont = Math.min(minDim * 0.28, availH * 0.5);
-  fontSize = Math.max(minFont, Math.min(maxFont, fontSize));
+  let fontSize = Math.min(fontSizeByWidth, fontSizeByHeightWrapped);
+  const maxFontByContent = (availH * 0.92) / (wrappedLineCount * LINE_HEIGHT_RATIO);
+  fontSize = Math.min(fontSize, maxFontByContent);
+  const minFont = minDim * 0.04;
+  fontSize = Math.max(minFont, fontSize);
 
-  return { fontSize, padding };
+  const safeFont = Number.isFinite(fontSize) && fontSize > 0 ? fontSize : minDim * 0.1;
+  const safePadding = Number.isFinite(padding) && padding >= 0 ? padding : minDim * 0.06;
+
+  return { fontSize: safeFont, padding: safePadding };
 }
