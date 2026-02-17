@@ -104,22 +104,10 @@ export function BoardCanvas({
         if (selected.length === 0) return null;
         let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
         for (const obj of selected) {
-          const w = obj.width;
-          const h = obj.height;
-          if (obj.type === 'circle') {
-            const size = Math.min(w, h);
-            const cx = obj.x + w / 2;
-            const cy = obj.y + h / 2;
-            minX = Math.min(minX, cx - size / 2);
-            minY = Math.min(minY, cy - size / 2);
-            maxX = Math.max(maxX, cx + size / 2);
-            maxY = Math.max(maxY, cy + size / 2);
-          } else {
-            minX = Math.min(minX, obj.x);
-            minY = Math.min(minY, obj.y);
-            maxX = Math.max(maxX, obj.x + w);
-            maxY = Math.max(maxY, obj.y + h);
-          }
+          minX = Math.min(minX, obj.x);
+          minY = Math.min(minY, obj.y);
+          maxX = Math.max(maxX, obj.x + obj.width);
+          maxY = Math.max(maxY, obj.y + obj.height);
         }
         return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
       })()
@@ -781,7 +769,6 @@ export function BoardCanvas({
                     width={obj.width}
                     height={obj.height}
                     zoomScale={viewport.scale}
-                    objectType={obj.type}
                     onResizeStart={(corner) => handleResizeStart(obj.id, corner)}
                     onResizeMove={(corner, e) => handleResizeMove(obj.id, corner, e)}
                     onResizeEnd={(corner, e) => handleResizeEnd(obj.id, corner, e)}
@@ -867,7 +854,6 @@ export function BoardCanvas({
                     width={obj.width}
                     height={obj.height}
                     zoomScale={viewport.scale}
-                    objectType={obj.type}
                     onResizeStart={(corner) => handleResizeStart(obj.id, corner)}
                     onResizeMove={(corner, e) => handleResizeMove(obj.id, corner, e)}
                     onResizeEnd={(corner, e) => handleResizeEnd(obj.id, corner, e)}

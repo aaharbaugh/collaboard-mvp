@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { BoardObject } from '../types/board';
 import { computeAutoFitFontSize } from '../lib/textParser';
 
+export const MIN_STICKY_EDIT_SIZE_PX = 24; // hide edit overlay when note smaller than this on screen
+
 interface TextEditingOverlayProps {
   obj: BoardObject | null;
   viewport: { x: number; y: number; scale: number };
@@ -32,6 +34,16 @@ export function TextEditingOverlay({
       setTimeout(() => inputRef.current?.focus(), 0);
     }
   }, [obj]);
+
+  // Close edit mode when note becomes too small on screen (e.g. after zoom out)
+  useEffect(() => {
+    if (!obj || obj.type !== 'stickyNote') return;
+    const minScreenDim = Math.min(
+      obj.width * viewport.scale,
+      obj.height * viewport.scale
+    );
+    if (minScreenDim < MIN_STICKY_EDIT_SIZE_PX) onCancel();
+  }, [obj, viewport.scale, viewport.x, viewport.y, onCancel]);
 
   const wrapSelection = useCallback((before: string, after: string) => {
     const ta = inputRef.current;
@@ -69,11 +81,14 @@ export function TextEditingOverlay({
   const screenW = obj.width * viewport.scale;
   const screenH = obj.height * viewport.scale;
 
-  const { fontSize: worldFontSize, padding: worldPadding } = computeAutoFitFontSize(
-    text, obj.width, obj.height
-  );
-  const screenFontSize = worldFontSize * viewport.scale;
-  const screenPadding = worldPadding * viewport.scale;
+  // Same as view mode: hide edit when note is too small on screen
+  const minScreenDim = Math.min(screenW, screenH);
+  if (minScreenDim < MIN_STICKY_EDIT_SIZE_PX) {
+    return null;
+  }
+
+  const { fontSize: worldFontSize } = computeAutoFitFontSize(text, obj.width, obj.height);
+  const screenFontSize = Math.max(12, worldFontSize * viewport.scale);
 
   const handleBlur = () => {
     onSave(obj.id, text);
@@ -99,6 +114,7 @@ export function TextEditingOverlay({
         right: 0,
         bottom: 0,
         pointerEvents: 'none',
+        zIndex: 5,
       }}
     >
       <div
@@ -143,10 +159,15 @@ export function TextEditingOverlay({
         onKeyDown={handleKeyDown}
         style={{
           position: 'absolute',
-          left: screenX + screenPadding,
-          top: screenY + screenPadding,
-          width: screenW - screenPadding * 2,
-          height: screenH - screenPadding * 2,
+          left: screenX,
+          top: screenY,
+          width: screenW,
+          height: screenH,
+          boxSizing: 'border-box',
+          padding: 4,
+          margin: 0,
+          border: '1px solid #4a7c59',
+          borderRadius: 2,
           fontSize: screenFontSize,
           lineHeight: 1.3,
           pointerEvents: 'auto',

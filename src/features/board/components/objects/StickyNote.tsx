@@ -4,6 +4,8 @@ import { CURSOR_COLORS } from '../../../../lib/constants';
 import { parseLines, computeAutoFitFontSize } from '../../../../lib/textParser';
 
 const TEXT_HIDE_SCALE = 0.05;
+const MIN_SCREEN_FONT_PX = 10;
+const MIN_FONT_TO_SHOW = 0.2;
 
 interface StickyNoteProps {
   obj: BoardObject;
@@ -25,9 +27,10 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
 
   const rawText = obj.text ?? '';
   const { fontSize, padding } = computeAutoFitFontSize(rawText, obj.width, obj.height);
-  const availW = obj.width - padding * 2;
-
+  const availW = Math.max(0, obj.width - padding * 2);
   const lines = parseLines(rawText);
+  const effectiveFontSize = Math.max(MIN_SCREEN_FONT_PX / zoomScale, fontSize);
+  const textFits = effectiveFontSize >= MIN_FONT_TO_SHOW && availW > 0;
 
   return (
     <Group
@@ -50,14 +53,14 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
         dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
         cornerRadius={2 / zoomScale}
       />
-      {showText && lines.map((line, i) => (
+      {showText && textFits && lines.map((line, i) => (
         <Text
           key={i}
           x={padding}
-          y={padding + i * fontSize * 1.3}
+          y={padding + i * effectiveFontSize * 1.3}
           width={availW}
           text={line.text}
-          fontSize={fontSize}
+          fontSize={effectiveFontSize}
           fontStyle={line.fontStyle}
           fontFamily='"Courier New", Courier, monospace'
           fill="#2c2416"
