@@ -7,7 +7,7 @@ interface AnchorPointsProps {
   visible: boolean;
   zoomScale: number;
   /** When 'circle', only 4 anchors (top/bottom/left/right) on the circle edge */
-  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text';
+  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text' | 'frame';
   onAnchorMouseDown: (anchor: AnchorPosition) => void;
   onAnchorMouseUp: (anchor: AnchorPosition) => void;
 }
@@ -55,6 +55,7 @@ export function AnchorPoints({
   onAnchorMouseUp,
 }: AnchorPointsProps) {
   if (!visible) return null;
+  if (objectType === 'frame') return null;
 
   const radius = 5 / zoomScale;
   const isCircle = objectType === 'circle';

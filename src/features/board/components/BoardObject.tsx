@@ -5,6 +5,7 @@ import { TextElement } from './objects/TextElement';
 import { Rectangle } from './objects/Rectangle';
 import { Circle } from './objects/Circle';
 import { ImageObject } from './objects/ImageObject';
+import { Frame } from './objects/Frame';
 
 interface BoardObjectProps {
   obj: BoardObjectType;
@@ -32,6 +33,7 @@ function areEqual(prev: BoardObjectProps, next: BoardObjectProps): boolean {
   if (a.sentToBack !== b.sentToBack) return false;
   if (a.selectedBy !== b.selectedBy || a.selectedByName !== b.selectedByName) return false;
   if (a.type === 'image' && (a as { imageData?: string }).imageData !== (b as { imageData?: string }).imageData) return false;
+  if ((a as { frameId?: string }).frameId !== (b as { frameId?: string }).frameId) return false;
   return true;
 }
 
@@ -50,6 +52,9 @@ function BoardObjectInner({ obj, isSelected, showSelectionBorder = true, remoteS
   }
   if (obj.type === 'image') {
     return <ImageObject obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;
+  }
+  if (obj.type === 'frame') {
+    return <Frame obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;
   }
   return null;
 }

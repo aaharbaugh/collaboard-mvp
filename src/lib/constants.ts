@@ -42,3 +42,9 @@ export const SHAPE_DEFAULTS = {
   width: 100,
   height: 80,
 };
+
+/** Default size for new frames (grouping container). */
+export const FRAME_DEFAULTS = {
+  width: 320,
+  height: 220,
+};

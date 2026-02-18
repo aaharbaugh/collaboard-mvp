@@ -1,6 +1,6 @@
 export interface BoardObject {
   id: string;
-  type: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text';
+  type: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text' | 'frame';
   x: number;
   y: number;
   width: number;
@@ -17,6 +17,8 @@ export interface BoardObject {
   selectedByName?: string | null;
   /** When true, object is drawn behind connection arrows */
   sentToBack?: boolean;
+  /** When set, this object belongs to the frame with this id; it moves/resizes with the frame */
+  frameId?: string;
 }
 
 export type AnchorPosition = 'top' | 'bottom' | 'left' | 'right'

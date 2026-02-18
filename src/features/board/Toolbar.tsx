@@ -8,6 +8,7 @@ const TOOLS: { mode: ToolMode; label: string; hotkey: string }[] = [
   { mode: 'rectangle', label: 'Rect', hotkey: '4' },
   { mode: 'circle', label: 'Circle', hotkey: '5' },
   { mode: 'text', label: 'Text', hotkey: '6' },
+  { mode: 'frame', label: 'Frame', hotkey: '7' },
 ];
 
 export function Toolbar() {

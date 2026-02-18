@@ -118,7 +118,8 @@ export function BoardView() {
     }
   };
 
-  // Click outside the edit overlay (e.g. on canvas) → save and close. Tab switch / off-window blur → persist only.
+  // Click outside the edit overlay (canvas, empty area, etc.) → save and close.
+  // Applies to both sticky notes and text fields (same overlay). Tab switch / off-window blur → persist only.
   useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;

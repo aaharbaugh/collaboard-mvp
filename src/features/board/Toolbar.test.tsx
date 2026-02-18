@@ -17,6 +17,7 @@ describe('Toolbar', () => {
     expect(screen.getByRole('button', { name: /text/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /rect/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /circle/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /frame/i })).toBeInTheDocument();
   });
 
   it('switches to text tool on button click', async () => {

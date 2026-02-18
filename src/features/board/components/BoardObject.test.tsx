@@ -31,6 +31,9 @@ vi.mock('./objects/ImageObject', () => ({
 vi.mock('./objects/TextElement', () => ({
   TextElement: () => <div data-testid="text-element">TextElement</div>,
 }));
+vi.mock('./objects/Frame', () => ({
+  Frame: () => <div data-testid="frame">Frame</div>,
+}));
 
 describe('BoardObject', () => {
   it('renders StickyNote for type stickyNote', () => {
@@ -58,6 +61,11 @@ describe('BoardObject', () => {
     expect(screen.getByTestId('text-element')).toBeInTheDocument();
   });
 
+  it('renders Frame for type frame', () => {
+    render(<BoardObject obj={{ ...baseObj, type: 'frame' }} isSelected={false} />);
+    expect(screen.getByTestId('frame')).toBeInTheDocument();
+  });
+
   it('renders nothing for unknown type', () => {
     render(
       <BoardObject obj={{ ...baseObj, type: 'unknown' as 'stickyNote' }} isSelected={false} />
@@ -67,5 +75,6 @@ describe('BoardObject', () => {
     expect(screen.queryByTestId('circle')).not.toBeInTheDocument();
     expect(screen.queryByTestId('image-object')).not.toBeInTheDocument();
     expect(screen.queryByTestId('text-element')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('frame')).not.toBeInTheDocument();
   });
 });

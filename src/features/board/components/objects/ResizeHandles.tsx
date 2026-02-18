@@ -8,7 +8,7 @@ interface ResizeHandlesProps {
   height: number;
   zoomScale: number;
   /** When 'circle', handles wrap the circle's bounding square (centered, size = min(w,h)) */
-  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text';
+  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text' | 'frame';
   onResizeStart: (corner: Corner) => void;
   onResizeMove: (corner: Corner, e: Konva.KonvaEventObject<DragEvent>) => void;
   onResizeEnd: (corner: Corner, e: Konva.KonvaEventObject<DragEvent>) => void;

@@ -15,6 +15,7 @@ import {
   STICKY_NOTE_DEFAULTS,
   TEXT_DEFAULTS,
   SHAPE_DEFAULTS,
+  FRAME_DEFAULTS,
   DEFAULT_OBJECT_COLORS,
 } from '../../lib/constants';
 import type { BoardObject as BoardObjectType, AnchorPosition } from '../../types/board';
@@ -92,6 +93,8 @@ export function BoardCanvas({
   const groupDragStartPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
   const objectNodeRefs = useRef<Map<string, Konva.Group>>(new Map());
   const resizeStart = useRef<{ objId: string; x: number; y: number; w: number; h: number } | null>(null);
+  /** When resizing a frame, snapshot of children x,y,width,height at resize start */
+  const resizeFrameChildrenStart = useRef<Map<string, { x: number; y: number; width: number; height: number }>>(new Map());
   const connectionJustCompleted = useRef(false);
 
   const allObjects = useMemo(() => Object.values(objects), [objects]);
@@ -200,6 +203,13 @@ export function BoardCanvas({
             height: SHAPE_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.circle,
           });
+        } else if (toolMode === 'frame') {
+          createObject({
+            ...base,
+            type: 'frame',
+            width: FRAME_DEFAULTS.width / scale,
+            height: FRAME_DEFAULTS.height / scale,
+          });
         }
         updateObject(id, { selectedBy: userId, selectedByName: userName });
         setSelection([id]);
@@ -260,11 +270,20 @@ export function BoardCanvas({
         const obj = objects[sid];
         if (obj) positions.set(sid, { x: obj.x, y: obj.y });
       });
+      // When dragging a frame, include all objects inside the frame so they move together
+      const draggedObj = objects[id];
+      if (draggedObj?.type === 'frame') {
+        allObjects.forEach((obj) => {
+          if (obj.frameId === id && !positions.has(obj.id)) {
+            positions.set(obj.id, { x: obj.x, y: obj.y });
+          }
+        });
+      }
       // Also record the dragged node's starting position
       positions.set(id, { x: e.target.x(), y: e.target.y() });
       groupDragStartPositions.current = positions;
     },
-    [objects]
+    [objects, allObjects]
   );
 
   const handleObjectDragMove = useCallback(
@@ -291,21 +310,78 @@ export function BoardCanvas({
   const handleObjectDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
       const startPositions = groupDragStartPositions.current;
+      const dx = startPositions.get(id)
+        ? e.target.x() - startPositions.get(id)!.x
+        : 0;
+      const dy = startPositions.get(id)
+        ? e.target.y() - startPositions.get(id)!.y
+        : 0;
+
       if (startPositions.size > 1) {
-        const startPos = startPositions.get(id);
-        if (startPos) {
-          const dx = e.target.x() - startPos.x;
-          const dy = e.target.y() - startPos.y;
-          startPositions.forEach((pos, sid) => {
-            updateObject(sid, { x: pos.x + dx, y: pos.y + dy });
-          });
-        }
+        startPositions.forEach((pos, sid) => {
+          const newX = pos.x + dx;
+          const newY = pos.y + dy;
+          const obj = objects[sid];
+          if (!obj) return;
+          let patch: { x: number; y: number; frameId?: string } = { x: newX, y: newY };
+          if (obj.type !== 'frame') {
+            const objRight = newX + obj.width;
+            const objBottom = newY + obj.height;
+            const overlapsFrame = (o: BoardObjectType) =>
+              o.type === 'frame' &&
+              o.id !== sid &&
+              newX < o.x + o.width &&
+              objRight > o.x &&
+              newY < o.y + o.height &&
+              objBottom > o.y;
+            const overlappingFrames = allObjects.filter(overlapsFrame);
+            const stillInCurrentFrame = obj.frameId && overlappingFrames.some((f) => f.id === obj.frameId);
+            if (stillInCurrentFrame) {
+              patch.frameId = obj.frameId;
+            } else if (obj.frameId && !overlappingFrames.some((f) => f.id === obj.frameId)) {
+              patch.frameId = undefined;
+            } else if (overlappingFrames.length > 0) {
+              patch.frameId = overlappingFrames[0].id;
+            } else {
+              patch.frameId = undefined;
+            }
+          }
+          updateObject(sid, patch);
+        });
       } else {
-        updateObject(id, { x: e.target.x(), y: e.target.y() });
+        const newX = e.target.x();
+        const newY = e.target.y();
+        const obj = objects[id];
+        if (obj && obj.type !== 'frame') {
+          const objRight = newX + obj.width;
+          const objBottom = newY + obj.height;
+          const overlapsFrame = (o: BoardObjectType) =>
+            o.type === 'frame' &&
+            o.id !== id &&
+            newX < o.x + o.width &&
+            objRight > o.x &&
+            newY < o.y + o.height &&
+            objBottom > o.y;
+          const overlappingFrames = allObjects.filter(overlapsFrame);
+          const stillInCurrentFrame = obj.frameId && overlappingFrames.some((f) => f.id === obj.frameId);
+          const patch: { x: number; y: number; frameId?: string } = { x: newX, y: newY };
+          if (stillInCurrentFrame) {
+            patch.frameId = obj.frameId;
+          } else if (obj.frameId && !overlappingFrames.some((f) => f.id === obj.frameId)) {
+            patch.frameId = undefined;
+          } else if (overlappingFrames.length > 0) {
+            patch.frameId = overlappingFrames[0].id;
+          } else {
+            patch.frameId = undefined;
+          }
+          updateObject(id, patch);
+        } else {
+          updateObject(id, { x: newX, y: newY });
+        }
       }
       groupDragStartPositions.current = new Map();
     },
-    [updateObject]
+    [updateObject, objects, allObjects]
   );
 
   const handleResizeStart = useCallback(
@@ -313,8 +389,19 @@ export function BoardCanvas({
       const obj = objects[objId];
       if (!obj) return;
       resizeStart.current = { objId, x: obj.x, y: obj.y, w: obj.width, h: obj.height };
+      if (obj.type === 'frame') {
+        const children = new Map<string, { x: number; y: number; width: number; height: number }>();
+        allObjects.forEach((o) => {
+          if (o.frameId === objId) {
+            children.set(o.id, { x: o.x, y: o.y, width: o.width, height: o.height });
+          }
+        });
+        resizeFrameChildrenStart.current = children;
+      } else {
+        resizeFrameChildrenStart.current = new Map();
+      }
     },
-    [objects]
+    [objects, allObjects]
   );
 
   const handleResizeMove = useCallback(
@@ -363,8 +450,25 @@ export function BoardCanvas({
       else if (corner === 'top-left') { node.x(-half); node.y(-half); }
 
       updateObject(objId, { x: newX, y: newY, width: newW, height: newH });
+
+      // When resizing a frame, scale children so they move and resize with the frame
+      const obj = objects[objId];
+      if (obj?.type === 'frame' && start.w > 0 && start.h > 0) {
+        resizeFrameChildrenStart.current.forEach((childStart, childId) => {
+          const relX = (childStart.x - start.x) / start.w;
+          const relY = (childStart.y - start.y) / start.h;
+          const relW = childStart.width / start.w;
+          const relH = childStart.height / start.h;
+          updateObject(childId, {
+            x: newX + relX * newW,
+            y: newY + relY * newH,
+            width: relW * newW,
+            height: relH * newH,
+          });
+        });
+      }
     },
-    [updateObject, viewport.scale]
+    [updateObject, viewport.scale, objects]
   );
 
   const handleResizeEnd = useCallback(
@@ -572,6 +676,12 @@ export function BoardCanvas({
         }
 
         selectedIds.forEach((id) => {
+          const obj = objects[id];
+          if (obj?.type === 'frame') {
+            allObjects.forEach((o) => {
+              if (o.frameId === id) updateObject(o.id, { frameId: undefined });
+            });
+          }
           deleteConnectionsForObject(id);
           deleteObject(id);
         });
@@ -603,8 +713,9 @@ export function BoardCanvas({
         const newIds: string[] = [];
         clipboardRef.current.forEach((obj) => {
           const newId = crypto.randomUUID();
+          const { frameId: _f, ...rest } = obj;
           createObject({
-            ...obj,
+            ...rest,
             id: newId,
             x: obj.x + 20,
             y: obj.y + 20,

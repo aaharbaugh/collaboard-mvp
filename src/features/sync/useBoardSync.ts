@@ -43,14 +43,19 @@ export function useBoardSync(boardId: string | null) {
     [boardId]
   );
 
+  /** Keys that can be explicitly cleared by passing undefined; we send null so Firebase removes them */
+  const CLEARABLE_OBJECT_KEYS = new Set<string>(['frameId', 'selectedBy', 'selectedByName']);
+
   const updateObject = useCallback(
     (id: string, updates: Partial<BoardObject>) => {
       if (!boardId) return;
-      // Only send defined fields so we never overwrite or clear other users' state (e.g. selectedBy).
-      // Firebase update() merges at the path; omitting a key leaves it unchanged.
       const payload: Record<string, unknown> = {};
       for (const [key, value] of Object.entries(updates)) {
-        if (value !== undefined) payload[key] = value;
+        if (value !== undefined) {
+          payload[key] = value;
+        } else if (CLEARABLE_OBJECT_KEYS.has(key)) {
+          payload[key] = null;
+        }
       }
       if (Object.keys(payload).length === 0) return;
       update(
