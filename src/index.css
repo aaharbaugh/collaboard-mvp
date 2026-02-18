@@ -320,6 +320,17 @@ body {
   color: var(--accent-green);
 }
 
+.text-edit-btn-done {
+  margin-left: 4px;
+  background: var(--accent-green);
+  border-color: var(--accent-green);
+  color: var(--bg-primary);
+}
+.text-edit-btn-done:hover {
+  filter: brightness(1.1);
+  color: var(--bg-primary);
+}
+
 /* Board canvas */
 .board-main {
   flex: 1;

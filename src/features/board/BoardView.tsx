@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useRef, useState, useEffect } from 'react';
 import { useAuth } from '../auth/useAuth';
 import { useBoardId } from './hooks/useBoardId';
 import { BoardCanvas } from './BoardCanvas';
@@ -10,12 +10,21 @@ import { useCursorSync } from '../sync/useCursorSync';
 import { useBoardSync } from '../sync/useBoardSync';
 import { TextEditingOverlay } from '../../components/TextEditingOverlay';
 import { ColorPicker } from './components/ColorPicker';
+import {
+  getPersistedEditState,
+  setPersistedEditState,
+  clearPersistedEditState,
+} from '../../lib/editStatePersistence';
 
 export function BoardView() {
   const { user, signOut } = useAuth();
   const { boardId, loading: boardLoading, error: boardError } = useBoardId(user?.uid);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
+  const hasRestoredRef = useRef(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const editOverlayContainerRef = useRef<HTMLDivElement>(null);
+  const latestDraftRef = useRef<string>('');
 
   const { objects, updateObject } = useBoardSync(boardId);
   const { cursors } = useCursorSync(
@@ -23,19 +32,67 @@ export function BoardView() {
     user?.uid,
     user?.displayName ?? 'Anonymous'
   );
-  const { viewport, selectedIds } = useBoardStore();
+  const { viewport, setViewport, selectedIds } = useBoardStore();
 
   const selectedObject = selectedIds.length === 1 ? objects[selectedIds[0]] : null;
+
+  // Restore edit state from localStorage when board and objects are ready.
+  // Do not clear persisted state when object is missing—objects may not have loaded yet.
+  useEffect(() => {
+    if (!boardId || hasRestoredRef.current) return;
+    const persisted = getPersistedEditState(boardId);
+    if (!persisted) return;
+    const obj = objects[persisted.editingId];
+    if (obj && (obj.type === 'stickyNote' || obj.type === 'text')) {
+      hasRestoredRef.current = true;
+      if (
+        persisted.viewport &&
+        Number.isFinite(persisted.viewport.x) &&
+        Number.isFinite(persisted.viewport.y) &&
+        Number.isFinite(persisted.viewport.scale) &&
+        persisted.viewport.scale > 0
+      ) {
+        setViewport(persisted.viewport);
+      }
+      setEditingId(persisted.editingId);
+      setRestoredDraft(persisted.draftText);
+      latestDraftRef.current = persisted.draftText;
+    }
+  }, [boardId, objects, setViewport]);
+
+  // If we're "editing" but the object is missing (deleted or wrong board), clear state
+  useEffect(() => {
+    if (!boardId || !editingId) return;
+    const obj = objects[editingId];
+    if (!obj) {
+      setEditingId(null);
+      setRestoredDraft(null);
+      clearPersistedEditState(boardId);
+    }
+  }, [boardId, editingId, objects]);
+
+  // Clear restored draft after overlay has consumed it (one tick)
+  useEffect(() => {
+    if (editingId && restoredDraft != null) {
+      const t = setTimeout(() => setRestoredDraft(null), 0);
+      return () => clearTimeout(t);
+    }
+  }, [editingId, restoredDraft]);
 
   const handleStickyNoteDoubleClick = (id: string) => {
     const obj = objects[id];
     if (obj?.type !== 'stickyNote' && obj?.type !== 'text') return;
+    if (boardId) clearPersistedEditState(boardId);
+    latestDraftRef.current = obj?.text ?? '';
     setEditingId(id);
+    setRestoredDraft(null);
   };
 
   const handleTextSave = (id: string, text: string, headingLevel?: number) => {
     updateObject(id, headingLevel !== undefined ? { text, headingLevel } : { text });
+    if (boardId) clearPersistedEditState(boardId);
     setEditingId(null);
+    setRestoredDraft(null);
   };
 
   const handleColorChange = (color: string) => {
@@ -43,6 +100,41 @@ export function BoardView() {
       updateObject(id, { color });
     });
   };
+
+  const handleEditCancel = () => {
+    if (boardId) clearPersistedEditState(boardId);
+    setEditingId(null);
+    setRestoredDraft(null);
+  };
+
+  const handleDraftChange = (text: string) => {
+    latestDraftRef.current = text;
+    if (boardId && editingId) {
+      setPersistedEditState(boardId, {
+        editingId,
+        draftText: text,
+        viewport: { x: viewport.x, y: viewport.y, scale: viewport.scale },
+      });
+    }
+  };
+
+  // Click outside the edit overlay (e.g. on canvas) → save and close. Tab switch / off-window blur → persist only.
+  useEffect(() => {
+    const wrapper = wrapperRef.current;
+    if (!wrapper) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (!editingId) return;
+      const target = e.target as Node;
+      if (editOverlayContainerRef.current?.contains(target)) return;
+      const draft = latestDraftRef.current ?? objects[editingId]?.text ?? '';
+      updateObject(editingId, { text: draft });
+      clearPersistedEditState(boardId ?? '');
+      setEditingId(null);
+      setRestoredDraft(null);
+    };
+    wrapper.addEventListener('mousedown', handleMouseDown, true);
+    return () => wrapper.removeEventListener('mousedown', handleMouseDown, true);
+  }, [editingId, boardId, objects, updateObject]);
 
   if (!user) {
     return null;
@@ -100,12 +192,16 @@ export function BoardView() {
             userName={user.displayName ?? 'Anonymous'}
             onStickyNoteDoubleClick={handleStickyNoteDoubleClick}
           />
-          <TextEditingOverlay
-            obj={editingId ? objects[editingId] ?? null : null}
-            viewport={viewport}
-            onSave={handleTextSave}
-            onCancel={() => setEditingId(null)}
-          />
+          <div ref={editOverlayContainerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+            <TextEditingOverlay
+              obj={editingId ? objects[editingId] ?? null : null}
+              viewport={viewport}
+              initialDraft={editingId && restoredDraft != null ? restoredDraft : undefined}
+              onSave={handleTextSave}
+              onCancel={handleEditCancel}
+              onDraftChange={handleDraftChange}
+            />
+          </div>
           <CursorOverlay
             cursors={cursors}
             viewport={viewport}

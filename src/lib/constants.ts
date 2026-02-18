@@ -19,8 +19,8 @@ export const STICKY_NOTE_DEFAULTS = {
   height: 120,
 };
 
-/** Minimum text size in screen pixels when zoomed out (infinite zoom). Set to 0 to remove; text then scales with zoom only. */
-export const MIN_READABLE_TEXT_SCREEN_PX = 8;
+/** Skip rendering text when box is smaller than this in screen px (avoids pointless draw). Text scales from 0 with zoom. */
+export const MIN_RENDER_SCREEN_PX = 0.5;
 
 /** Default size for standalone text element (heading-style). */
 export const TEXT_DEFAULTS = {

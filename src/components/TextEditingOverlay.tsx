@@ -2,23 +2,32 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import type { BoardObject } from '../types/board';
 import { computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../lib/textParser';
 
+const DRAFT_PERSIST_DEBOUNCE_MS = 400;
+
 interface TextEditingOverlayProps {
   obj: BoardObject | null;
   viewport: { x: number; y: number; scale: number };
+  initialDraft?: string;
   onSave: (id: string, text: string, headingLevel?: number) => void;
   onCancel: () => void;
+  onDraftChange?: (text: string) => void;
 }
 
 export function TextEditingOverlay({
   obj,
   viewport,
+  initialDraft,
   onSave,
   onCancel,
+  onDraftChange,
 }: TextEditingOverlayProps) {
-  const [text, setText] = useState(obj?.text ?? '');
+  const [text, setText] = useState(
+    () => (initialDraft !== undefined ? initialDraft : obj?.text ?? '')
+  );
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const openedIdRef = useRef<string | null>(null);
+  const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!obj) {
@@ -27,10 +36,24 @@ export function TextEditingOverlay({
     }
     if (openedIdRef.current !== obj.id) {
       openedIdRef.current = obj.id;
-      setText(obj.text ?? '');
+      setText(initialDraft !== undefined ? initialDraft : obj.text ?? '');
       setTimeout(() => inputRef.current?.focus(), 0);
     }
-  }, [obj]);
+  }, [obj, initialDraft]);
+
+  useEffect(() => {
+    if (!onDraftChange || !obj) return;
+    draftDebounceRef.current = setTimeout(() => {
+      draftDebounceRef.current = null;
+      onDraftChange(text);
+    }, DRAFT_PERSIST_DEBOUNCE_MS);
+    return () => {
+      if (draftDebounceRef.current) {
+        clearTimeout(draftDebounceRef.current);
+        draftDebounceRef.current = null;
+      }
+    };
+  }, [text, obj?.id, onDraftChange]);
 
   // Close edit only when visible note/text has no drawable area (infinite zoom: no scale-based minimum)
   useEffect(() => {
@@ -102,8 +125,12 @@ export function TextEditingOverlay({
   const handleBlur = (e: React.FocusEvent<HTMLTextAreaElement>) => {
     const next = e.relatedTarget as Node | null;
     if (toolbarRef.current && next && toolbarRef.current.contains(next)) return;
-    onSave(obj.id, text);
-    onCancel();
+    // Persist draft only; do not save to server or close. User can click Done to save.
+    if (draftDebounceRef.current) {
+      clearTimeout(draftDebounceRef.current);
+      draftDebounceRef.current = null;
+    }
+    onDraftChange?.(text);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -111,6 +138,11 @@ export function TextEditingOverlay({
       setText(obj.text ?? '');
       onCancel();
     }
+  };
+
+  const handleDone = () => {
+    onSave(obj.id, text);
+    onCancel();
   };
 
   const toolbarHeight = 28;
@@ -161,6 +193,13 @@ export function TextEditingOverlay({
           title="List"
         >
           List
+        </button>
+        <button
+          className="text-edit-btn text-edit-btn-done"
+          onClick={handleDone}
+          title="Save and close"
+        >
+          Done
         </button>
       </div>
       <textarea

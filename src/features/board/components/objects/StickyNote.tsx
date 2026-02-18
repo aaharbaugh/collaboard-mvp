@@ -1,6 +1,6 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS, MIN_READABLE_TEXT_SCREEN_PX } from '../../../../lib/constants';
+import { CURSOR_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
 import { parseLines, computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
 
 interface StickyNoteProps {
@@ -24,32 +24,29 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const w = Math.max(0, obj.width);
   const h = Math.max(0, obj.height);
 
-  // Use world-space (box) dimensions so layout is zoom-invariant — no recomputation when zooming
+  // World-space only: text scales with zoom from 0; no minimum readability
   const { fontSize, padding } = computeAutoFitFontSize(
     rawText,
     Math.max(1, w),
     Math.max(1, h),
   );
-  // Optional minimum screen size (0 = no minimum; text scales with zoom)
   const scale = Math.max(1e-10, zoomScale);
-  const minWorldFont = MIN_READABLE_TEXT_SCREEN_PX > 0 ? MIN_READABLE_TEXT_SCREEN_PX / scale : 0;
-  const displayFontSize = minWorldFont > 0 ? Math.max(fontSize, minWorldFont) : fontSize;
-  const isClampedForReadability = displayFontSize > fontSize;
+  const screenW = w * scale;
+  const screenH = h * scale;
+  // Only render text when box is at least MIN_RENDER_SCREEN_PX on screen (avoid pointless draw)
+  const bigEnoughToRender = screenW >= MIN_RENDER_SCREEN_PX && screenH >= MIN_RENDER_SCREEN_PX && fontSize >= 0.5;
 
   const availW = Math.max(1, w - padding * 2);
   const availH = Math.max(1, h - padding * 2);
   const parsed = parseLines(rawText);
   const displayText = parsed.map((l) => l.text).join('\n');
-  const wrappedLines = getWrappedLines(displayText, availW, displayFontSize);
+  const wrappedLines = getWrappedLines(displayText, availW, fontSize);
   const hasContent = displayText.length > 0;
-  const showText = w >= 1 && h >= 1 && hasContent && Number.isFinite(displayFontSize) && displayFontSize > 0;
+  const showText = bigEnoughToRender && w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
 
-  const lineHeight = displayFontSize * LINE_HEIGHT_RATIO;
+  const lineHeight = fontSize * LINE_HEIGHT_RATIO;
   const maxLinesThatFit = lineHeight > 0 ? Math.max(1, Math.floor(availH / lineHeight)) : 1;
   const visibleLines = wrappedLines.slice(0, maxLinesThatFit);
-
-  // When text is clamped for readability at small zoom, don't clip so overflow is visible
-  const clip = !isClampedForReadability;
 
   return (
     <Group
@@ -58,10 +55,10 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
       width={w}
       height={h}
       rotation={obj.rotation ?? 0}
-      clipX={clip ? 0 : undefined}
-      clipY={clip ? 0 : undefined}
-      clipWidth={clip ? w : undefined}
-      clipHeight={clip ? h : undefined}
+      clipX={0}
+      clipY={0}
+      clipWidth={w}
+      clipHeight={h}
     >
       <Rect
         width={w}
@@ -81,7 +78,7 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
               y={padding + i * lineHeight}
               width={availW}
               text={lineText}
-              fontSize={displayFontSize}
+              fontSize={fontSize}
               fontFamily='"Courier New", Courier, monospace'
               fill="#2c2416"
               listening={false}
