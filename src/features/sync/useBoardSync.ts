@@ -35,9 +35,29 @@ export function useBoardSync(boardId: string | null) {
   const createObject = useCallback(
     (obj: BoardObject) => {
       if (!boardId) return;
+      // Serialize to a plain object so undefined/null and non-JSON fields don't break persistence (e.g. frames)
+      const payload: Record<string, unknown> = {
+        id: obj.id,
+        type: obj.type,
+        x: obj.x,
+        y: obj.y,
+        width: obj.width,
+        height: obj.height,
+        createdBy: obj.createdBy,
+        createdAt: obj.createdAt,
+      };
+      if (obj.color != null) payload.color = obj.color;
+      if (obj.text != null) payload.text = obj.text;
+      if (obj.headingLevel != null) payload.headingLevel = obj.headingLevel;
+      if (obj.imageData != null) payload.imageData = obj.imageData;
+      if (obj.rotation != null) payload.rotation = obj.rotation;
+      if (obj.selectedBy != null) payload.selectedBy = obj.selectedBy;
+      if (obj.selectedByName != null) payload.selectedByName = obj.selectedByName;
+      if (obj.sentToBack != null) payload.sentToBack = obj.sentToBack;
+      if (obj.frameId != null) payload.frameId = obj.frameId;
       set(
         ref(database, `boards/${boardId}/objects/${obj.id}`),
-        obj
+        payload
       ).catch(console.error);
     },
     [boardId]

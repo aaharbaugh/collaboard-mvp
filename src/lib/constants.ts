@@ -11,6 +11,7 @@ export const DEFAULT_OBJECT_COLORS: Record<string, string> = {
   stickyNote: '#f5e6ab',
   rectangle: '#d4e4bc',
   circle: '#c5d5e8',
+  star: '#e8d4bc',
   text: '#1a1a1a',
 };
 

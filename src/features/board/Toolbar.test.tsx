@@ -11,13 +11,22 @@ describe('Toolbar', () => {
 
   it('renders all tool buttons', () => {
     render(<Toolbar />);
-    expect(screen.getByRole('button', { name: /select/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /move/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /sticky/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /\[1\]/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /sticky note/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /\[3\]/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /text/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /rect/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /circle/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /frame/i })).toBeInTheDocument();
+  });
+
+  it('pointer button [1] cycles select <-> move', async () => {
+    const user = userEvent.setup();
+    render(<Toolbar />);
+    const pointerBtn = screen.getByRole('button', { name: /\[1\]/ });
+    expect(useBoardStore.getState().toolMode).toBe('select');
+    await user.click(pointerBtn);
+    expect(useBoardStore.getState().toolMode).toBe('move');
+    await user.click(pointerBtn);
+    expect(useBoardStore.getState().toolMode).toBe('select');
   });
 
   it('switches to text tool on button click', async () => {
@@ -27,11 +36,11 @@ describe('Toolbar', () => {
     expect(useBoardStore.getState().toolMode).toBe('text');
   });
 
-  it('switches to text tool on hotkey 6', () => {
+  it('switches to text tool on hotkey 4', () => {
     render(<Toolbar />);
     expect(useBoardStore.getState().toolMode).toBe('select');
     act(() => {
-      window.dispatchEvent(new KeyboardEvent('keydown', { key: '6', bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: '4', bubbles: true }));
     });
     expect(useBoardStore.getState().toolMode).toBe('text');
   });
@@ -39,14 +48,21 @@ describe('Toolbar', () => {
   it('marks current tool as active', () => {
     useBoardStore.setState({ toolMode: 'stickyNote' });
     render(<Toolbar />);
-    const stickyBtn = screen.getByRole('button', { name: /sticky/i });
+    const stickyBtn = screen.getByRole('button', { name: /sticky note/i });
     expect(stickyBtn).toHaveClass('active');
   });
 
-  it('switches tool on button click', async () => {
+  it('shape button [3] cycles star -> circle -> rectangle', async () => {
     const user = userEvent.setup();
     render(<Toolbar />);
-    await user.click(screen.getByRole('button', { name: /circle/i }));
+    const shapeBtn = screen.getByRole('button', { name: /\[3\]/ });
+    await user.click(shapeBtn);
+    expect(useBoardStore.getState().toolMode).toBe('star');
+    await user.click(shapeBtn);
     expect(useBoardStore.getState().toolMode).toBe('circle');
+    await user.click(shapeBtn);
+    expect(useBoardStore.getState().toolMode).toBe('rectangle');
+    await user.click(shapeBtn);
+    expect(useBoardStore.getState().toolMode).toBe('star');
   });
 });

@@ -1,8 +1,8 @@
-import { Group, Rect, Text } from 'react-konva';
+import { Group, Star as KonvaStar, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
 import { CURSOR_COLORS } from '../../../../lib/constants';
 
-interface RectangleProps {
+interface StarProps {
   obj: BoardObject;
   isSelected: boolean;
   showSelectionBorder?: boolean;
@@ -10,8 +10,13 @@ interface RectangleProps {
   zoomScale?: number;
 }
 
-export function Rectangle({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: RectangleProps) {
-  const color = obj.color ?? '#d4e4bc';
+export function Star({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: StarProps) {
+  const color = obj.color ?? '#e8d4bc';
+  const size = Math.min(obj.width, obj.height) / 2;
+  const cx = obj.x + obj.width / 2;
+  const cy = obj.y + obj.height / 2;
+  const outerRadius = size;
+  const innerRadius = size * 0.4;
   const remoteColor = remoteSelectedBy
     ? CURSOR_COLORS[remoteSelectedBy.length % CURSOR_COLORS.length]
     : undefined;
@@ -21,11 +26,12 @@ export function Rectangle({ obj, isSelected, showSelectionBorder = true, remoteS
 
   return (
     <Group>
-      <Rect
-        x={obj.x}
-        y={obj.y}
-        width={obj.width}
-        height={obj.height}
+      <KonvaStar
+        x={cx}
+        y={cy}
+        numPoints={5}
+        innerRadius={innerRadius}
+        outerRadius={outerRadius}
         fill={color}
         stroke={showSelectionBorder && isSelected ? '#4a7c59' : remoteColor ?? undefined}
         strokeWidth={hasStroke ? sw : 0}
@@ -33,7 +39,7 @@ export function Rectangle({ obj, isSelected, showSelectionBorder = true, remoteS
       />
       {remoteSelectedBy && (
         <Text
-          x={obj.x}
+          x={cx - 20 / zoomScale}
           y={obj.y - 16 / zoomScale}
           text={remoteSelectedBy}
           fontSize={10 / zoomScale}

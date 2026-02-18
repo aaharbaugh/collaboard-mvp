@@ -37,7 +37,6 @@ export function ImageObject({ obj, isSelected, showSelectionBorder = true, remot
           width={obj.width}
           height={obj.height}
           image={image}
-          rotation={obj.rotation ?? 0}
         />
       )}
       {hasStroke && (
@@ -50,7 +49,6 @@ export function ImageObject({ obj, isSelected, showSelectionBorder = true, remot
           strokeWidth={sw}
           dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
           fill="transparent"
-          rotation={obj.rotation ?? 0}
         />
       )}
       {remoteSelectedBy && (

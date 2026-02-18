@@ -4,6 +4,7 @@ import { StickyNote } from './objects/StickyNote';
 import { TextElement } from './objects/TextElement';
 import { Rectangle } from './objects/Rectangle';
 import { Circle } from './objects/Circle';
+import { Star } from './objects/Star';
 import { ImageObject } from './objects/ImageObject';
 import { Frame } from './objects/Frame';
 
@@ -49,6 +50,9 @@ function BoardObjectInner({ obj, isSelected, showSelectionBorder = true, remoteS
   }
   if (obj.type === 'circle') {
     return <Circle obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;
+  }
+  if (obj.type === 'star') {
+    return <Star obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;
   }
   if (obj.type === 'image') {
     return <ImageObject obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;

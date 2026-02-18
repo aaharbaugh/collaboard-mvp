@@ -1,6 +1,6 @@
 export interface BoardObject {
   id: string;
-  type: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text' | 'frame';
+  type: 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'image' | 'text' | 'frame';
   x: number;
   y: number;
   width: number;
@@ -22,7 +22,8 @@ export interface BoardObject {
 }
 
 export type AnchorPosition = 'top' | 'bottom' | 'left' | 'right'
-  | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
+  | 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
+  | 'star-0' | 'star-1' | 'star-2' | 'star-3' | 'star-4';
 
 export interface Connection {
   id: string;

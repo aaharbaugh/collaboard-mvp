@@ -4,29 +4,7 @@ export interface ParsedLine {
 }
 
 export function parseLines(raw: string): ParsedLine[] {
-  return raw.split('\n').map((line) => {
-    let text = line;
-    let fontStyle = 'normal';
-
-    // List items
-    if (text.startsWith('- ')) {
-      text = '• ' + text.slice(2);
-    }
-
-    // Bold (detect **...**)
-    if (text.includes('**')) {
-      text = text.replace(/\*\*(.*?)\*\*/g, '$1');
-      fontStyle = 'bold';
-    }
-
-    // Italic (detect *...* — must run after bold stripping)
-    if (text.includes('*')) {
-      text = text.replace(/\*(.*?)\*/g, '$1');
-      fontStyle = fontStyle === 'bold' ? 'bold italic' : 'italic';
-    }
-
-    return { text, fontStyle };
-  });
+  return raw.split('\n').map((line) => ({ text: line, fontStyle: 'normal' }));
 }
 
 export const LINE_HEIGHT_RATIO = 1.3;

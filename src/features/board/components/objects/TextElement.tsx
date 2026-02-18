@@ -47,22 +47,20 @@ export function TextElement({
   const parsed = parseLines(rawText);
   const displayText = parsed.map((l) => l.text).join('\n');
   const wrappedLines = getWrappedLines(displayText, availW, fontSize);
-  const hasContent = displayText.length > 0;
-  const showText = bigEnoughToRender && w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
-
   const lineHeight = fontSize * LINE_HEIGHT_RATIO;
   const maxLinesThatFit = lineHeight > 0 ? Math.max(1, Math.floor(availH / lineHeight)) : 1;
   const visibleLines = wrappedLines.slice(0, maxLinesThatFit);
+  const hasContent = displayText.length > 0;
+  const showText = bigEnoughToRender && w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
 
   const textColor = obj.color ?? '#1a1a1a';
 
   return (
     <Group
-      x={obj.x}
-      y={obj.y}
+      x={0}
+      y={0}
       width={w}
       height={h}
-      rotation={obj.rotation ?? 0}
       clipX={0}
       clipY={0}
       clipWidth={w}

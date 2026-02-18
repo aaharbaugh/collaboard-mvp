@@ -7,7 +7,7 @@ interface AnchorPointsProps {
   visible: boolean;
   zoomScale: number;
   /** When 'circle', only 4 anchors (top/bottom/left/right) on the circle edge */
-  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text' | 'frame';
+  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'image' | 'text' | 'frame';
   onAnchorMouseDown: (anchor: AnchorPosition) => void;
   onAnchorMouseUp: (anchor: AnchorPosition) => void;
 }
@@ -38,11 +38,28 @@ function getCircleAnchorXY(w: number, h: number, position: AnchorPosition): { x:
   }
 }
 
-const CIRCLE_ANCHORS: { position: AnchorPosition }[] = [
-  { position: 'top' },
-  { position: 'bottom' },
-  { position: 'left' },
-  { position: 'right' },
+const CIRCLE_ANCHORS: { position: AnchorPosition; getXY: (w: number, h: number) => { x: number; y: number } }[] = [
+  { position: 'top', getXY: (w, h) => getCircleAnchorXY(w, h, 'top') },
+  { position: 'bottom', getXY: (w, h) => getCircleAnchorXY(w, h, 'bottom') },
+  { position: 'left', getXY: (w, h) => getCircleAnchorXY(w, h, 'left') },
+  { position: 'right', getXY: (w, h) => getCircleAnchorXY(w, h, 'right') },
+];
+
+/** Star: 5 anchors on the outer points (same angle order as Konva Star: first at top, then clockwise) */
+function getStarAnchorXY(w: number, h: number, pointIndex: number): { x: number; y: number } {
+  const r = Math.min(w, h) / 2;
+  const cx = w / 2;
+  const cy = h / 2;
+  const angle = -Math.PI / 2 + pointIndex * (2 * Math.PI / 5);
+  return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+}
+
+const STAR_ANCHORS: { position: AnchorPosition; getXY: (w: number, h: number) => { x: number; y: number } }[] = [
+  { position: 'star-0', getXY: (w, h) => getStarAnchorXY(w, h, 0) },
+  { position: 'star-1', getXY: (w, h) => getStarAnchorXY(w, h, 1) },
+  { position: 'star-2', getXY: (w, h) => getStarAnchorXY(w, h, 2) },
+  { position: 'star-3', getXY: (w, h) => getStarAnchorXY(w, h, 3) },
+  { position: 'star-4', getXY: (w, h) => getStarAnchorXY(w, h, 4) },
 ];
 
 export function AnchorPoints({
@@ -58,10 +75,13 @@ export function AnchorPoints({
   if (objectType === 'frame') return null;
 
   const radius = 5 / zoomScale;
+  const isStar = objectType === 'star';
   const isCircle = objectType === 'circle';
-  const anchors = isCircle
-    ? CIRCLE_ANCHORS.map((a) => ({ position: a.position, getXY: (w: number, h: number) => getCircleAnchorXY(w, h, a.position) }))
-    : RECTANGLE_ANCHORS;
+  const anchors = isStar
+    ? STAR_ANCHORS
+    : isCircle
+      ? CIRCLE_ANCHORS
+      : RECTANGLE_ANCHORS;
 
   return (
     <>

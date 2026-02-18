@@ -216,6 +216,36 @@ body {
   margin-right: 0.25rem;
 }
 
+.toolbar-shape-group {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  position: relative;
+}
+
+.toolbar-shape-preview {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.35rem;
+  margin-bottom: 0.15rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: 2px;
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.08);
+}
+
+.toolbar-shape-preview svg {
+  display: block;
+  opacity: 0.95;
+}
+
 /* Presence */
 .presence-list {
   display: flex;

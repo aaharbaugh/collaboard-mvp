@@ -8,7 +8,7 @@ interface ResizeHandlesProps {
   height: number;
   zoomScale: number;
   /** When 'circle', handles wrap the circle's bounding square (centered, size = min(w,h)) */
-  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'image' | 'text' | 'frame';
+  objectType?: 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'image' | 'text' | 'frame';
   onResizeStart: (corner: Corner) => void;
   onResizeMove: (corner: Corner, e: Konva.KonvaEventObject<DragEvent>) => void;
   onResizeEnd: (corner: Corner, e: Konva.KonvaEventObject<DragEvent>) => void;
@@ -33,11 +33,11 @@ export function ResizeHandles({
   const size = 10 / zoomScale;
   const half = size / 2;
 
-  const isCircle = objectType === 'circle';
-  const boxW = isCircle ? Math.min(width, height) : width;
-  const boxH = isCircle ? Math.min(width, height) : height;
-  const boxX = isCircle ? (width - boxW) / 2 : 0;
-  const boxY = isCircle ? (height - boxH) / 2 : 0;
+  const isRound = objectType === 'circle' || objectType === 'star';
+  const boxW = isRound ? Math.min(width, height) : width;
+  const boxH = isRound ? Math.min(width, height) : height;
+  const boxX = isRound ? (width - boxW) / 2 : 0;
+  const boxY = isRound ? (height - boxH) / 2 : 0;
 
   return (
     <>

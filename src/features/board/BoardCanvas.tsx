@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type Konva from 'konva';
-import { Stage, Layer, Group, Arrow, Rect } from 'react-konva';
+import { Stage, Layer, Group, Arrow, Rect, Transformer } from 'react-konva';
 import { useContainerSize } from '../../hooks/useContainerSize';
 import { useBoardSync } from '../sync/useBoardSync';
 import { useCursorSync } from '../sync/useCursorSync';
@@ -19,20 +19,7 @@ import {
   DEFAULT_OBJECT_COLORS,
 } from '../../lib/constants';
 import type { BoardObject as BoardObjectType, AnchorPosition } from '../../types/board';
-
-function getAnchorWorldPoint(obj: BoardObjectType, anchor: AnchorPosition): { x: number; y: number } {
-  const { x, y, width: w, height: h } = obj;
-  switch (anchor) {
-    case 'top': return { x: x + w / 2, y };
-    case 'bottom': return { x: x + w / 2, y: y + h };
-    case 'left': return { x, y: y + h / 2 };
-    case 'right': return { x: x + w, y: y + h / 2 };
-    case 'top-left': return { x, y };
-    case 'top-right': return { x: x + w, y };
-    case 'bottom-left': return { x, y: y + h };
-    case 'bottom-right': return { x: x + w, y: y + h };
-  }
-}
+import { getAnchorWorldPoint } from './utils/anchorPoint';
 
 interface BoardCanvasProps {
   boardId: string;
@@ -91,30 +78,106 @@ export function BoardCanvas({
   const clipboardRef = useRef<BoardObjectType[]>([]);
   const didAreaSelect = useRef(false);
   const groupDragStartPositions = useRef<Map<string, { x: number; y: number }>>(new Map());
+  const frameDragFrameIdRef = useRef<string | null>(null);
+  const frameDragRAFRef = useRef<number | null>(null);
+  const frameDragDeltasRef = useRef<{ dx: number; dy: number }>({ dx: 0, dy: 0 });
+  const [frameDragPositions, setFrameDragPositions] = useState<Map<string, { x: number; y: number }> | null>(null);
   const objectNodeRefs = useRef<Map<string, Konva.Group>>(new Map());
   const resizeStart = useRef<{ objId: string; x: number; y: number; w: number; h: number } | null>(null);
   /** When resizing a frame, snapshot of children x,y,width,height at resize start */
   const resizeFrameChildrenStart = useRef<Map<string, { x: number; y: number; width: number; height: number }>>(new Map());
   const connectionJustCompleted = useRef(false);
+  const transformerRef = useRef<Konva.Transformer>(null);
+  const [transformVersion, setTransformVersion] = useState(0);
+  const transformRAFRef = useRef<number | null>(null);
 
   const allObjects = useMemo(() => Object.values(objects), [objects]);
   const backObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack === true), [allObjects]);
   const frontObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack !== true), [allObjects]);
 
   const isMultiSelect = selectedIds.length > 1;
-  const selectionBounds = useMemo(() => {
+  /**
+   * Bounding box for the multi-select highlight rect.
+   *
+   * Strategy: compute the AABB from STORED (Firebase) object positions so the
+   * box center matches the Transformer's pivot point. Then read the live rotation
+   * DELTA from one representative Konva node (all selected nodes rotate by the
+   * same delta during a Transformer gesture) and apply only that delta as the
+   * box rotation. This makes the dashed rect visually rotate in lock-step with
+   * the Transformer, around the same center, without any double-rotation artifact.
+   */
+  const selectionBox = useMemo(() => {
     if (!isMultiSelect) return null;
     const selected = selectedIds.map((id) => objects[id]).filter(Boolean) as BoardObjectType[];
     if (selected.length === 0) return null;
+
+    // AABB from stored positions/rotations (the "initial" box before any live delta)
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const obj of selected) {
-      minX = Math.min(minX, obj.x);
-      minY = Math.min(minY, obj.y);
-      maxX = Math.max(maxX, obj.x + obj.width);
-      maxY = Math.max(maxY, obj.y + obj.height);
+      const w = obj.width;
+      const h = obj.height;
+      const cx = obj.x + w / 2;
+      const cy = obj.y + h / 2;
+      const rot = obj.rotation ?? 0;
+      const rad = (rot * Math.PI) / 180;
+      const c = Math.cos(rad);
+      const s = Math.sin(rad);
+      for (const p of [
+        { x: -w / 2, y: -h / 2 },
+        { x: w / 2, y: -h / 2 },
+        { x: w / 2, y: h / 2 },
+        { x: -w / 2, y: h / 2 },
+      ]) {
+        const wx = cx + p.x * c - p.y * s;
+        const wy = cy + p.x * s + p.y * c;
+        minX = Math.min(minX, wx);
+        minY = Math.min(minY, wy);
+        maxX = Math.max(maxX, wx);
+        maxY = Math.max(maxY, wy);
+      }
     }
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
-  }, [isMultiSelect, selectedIds, objects]);
+
+    const width = maxX - minX;
+    const height = maxY - minY;
+    const x = minX;
+    const y = minY;
+
+    // Live rotation delta: all objects rotate by the same angle during a single
+    // Transformer gesture, so use the first selected object as representative.
+    const firstObj = selected[0];
+    const firstNode = objectNodeRefs.current.get(firstObj.id);
+    const storedRot = firstObj.rotation ?? 0;
+    const liveRot = firstNode ? firstNode.rotation() : storedRot;
+    const rotation = liveRot - storedRot;
+
+    return { x, y, width, height, rotation };
+  }, [isMultiSelect, selectedIds, objects, transformVersion]);
+
+  /**
+   * Objects with live positions/rotations read directly from Konva node refs.
+   * Re-computed on every transformVersion bump (each RAF during rotation) so
+   * ConnectionLine endpoints follow the object in real-time without waiting for
+   * a Firebase round-trip. Falls back to store data for non-transformed objects.
+   */
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const liveObjects = useMemo(() => {
+    const result: Record<string, BoardObjectType> = {};
+    for (const [id, obj] of Object.entries(objects)) {
+      const node = objectNodeRefs.current.get(id);
+      if (node) {
+        result[id] = {
+          ...obj,
+          x: node.x() - obj.width / 2,
+          y: node.y() - obj.height / 2,
+          rotation: node.rotation(),
+        };
+      } else {
+        result[id] = obj;
+      }
+    }
+    return result;
+  // objectNodeRefs.current is a mutable ref read intentionally for live Konva node state
+  }, [objects, transformVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clearSelection = useCallback(() => {
     const ids = useBoardStore.getState().selectedIds;
@@ -123,7 +186,23 @@ export function BoardCanvas({
     });
     setSelection([]);
     setSelectedConnectionId(null);
+    if (transformRAFRef.current != null) {
+      cancelAnimationFrame(transformRAFRef.current);
+      transformRAFRef.current = null;
+    }
+    setTransformVersion(0);
   }, [updateObject, setSelection]);
+
+  // Drop selector/transform state when no longer multi-select (deselect or single selection)
+  useEffect(() => {
+    if (selectedIds.length <= 1) {
+      if (transformRAFRef.current != null) {
+        cancelAnimationFrame(transformRAFRef.current);
+        transformRAFRef.current = null;
+      }
+      setTransformVersion(0);
+    }
+  }, [selectedIds.length]);
 
   const handleStageClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
@@ -203,6 +282,14 @@ export function BoardCanvas({
             height: SHAPE_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.circle,
           });
+        } else if (toolMode === 'star') {
+          createObject({
+            ...base,
+            type: 'star',
+            width: SHAPE_DEFAULTS.width / scale,
+            height: SHAPE_DEFAULTS.height / scale,
+            color: DEFAULT_OBJECT_COLORS.star,
+          });
         } else if (toolMode === 'frame') {
           createObject({
             ...base,
@@ -264,24 +351,34 @@ export function BoardCanvas({
     (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
       const currentSelectedIds = useBoardStore.getState().selectedIds;
       if (!currentSelectedIds.includes(id)) return;
-      // Snapshot start positions for all selected objects
+      const draggedObj = objects[id];
+      // Snapshot start center positions (groups use center for position when rotating)
       const positions = new Map<string, { x: number; y: number }>();
       currentSelectedIds.forEach((sid) => {
         const obj = objects[sid];
-        if (obj) positions.set(sid, { x: obj.x, y: obj.y });
+        if (obj) positions.set(sid, { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 });
       });
-      // When dragging a frame, include all objects inside the frame so they move together
-      const draggedObj = objects[id];
       if (draggedObj?.type === 'frame') {
         allObjects.forEach((obj) => {
           if (obj.frameId === id && !positions.has(obj.id)) {
-            positions.set(obj.id, { x: obj.x, y: obj.y });
+            positions.set(obj.id, { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 });
           }
         });
       }
-      // Also record the dragged node's starting position
       positions.set(id, { x: e.target.x(), y: e.target.y() });
+      // Use actual node positions when refs exist so we stay in sync with what's on screen (avoids store/Firebase lag)
+      positions.forEach((_pos, sid) => {
+        const node = objectNodeRefs.current.get(sid);
+        if (node) positions.set(sid, { x: node.x(), y: node.y() });
+      });
       groupDragStartPositions.current = positions;
+      const isFrameDrag = draggedObj?.type === 'frame';
+      frameDragFrameIdRef.current = isFrameDrag ? id : null;
+      if (isFrameDrag) {
+        setFrameDragPositions(new Map(positions));
+      } else {
+        setFrameDragPositions(null);
+      }
     },
     [objects, allObjects]
   );
@@ -303,6 +400,21 @@ export function BoardCanvas({
           node.y(pos.y + dy);
         }
       });
+
+      if (frameDragFrameIdRef.current) {
+        frameDragDeltasRef.current = { dx, dy };
+        if (frameDragRAFRef.current == null) {
+          frameDragRAFRef.current = requestAnimationFrame(() => {
+            frameDragRAFRef.current = null;
+            const { dx: ddx, dy: ddy } = frameDragDeltasRef.current;
+            const next = new Map<string, { x: number; y: number }>();
+            startPositions.forEach((pos, sid) => {
+              next.set(sid, { x: pos.x + ddx, y: pos.y + ddy });
+            });
+            setFrameDragPositions(next);
+          });
+        }
+      }
     },
     []
   );
@@ -318,13 +430,25 @@ export function BoardCanvas({
         : 0;
 
       if (startPositions.size > 1) {
+        const draggedObj = objects[id];
+        const isFrameDrag = draggedObj?.type === 'frame';
+
         startPositions.forEach((pos, sid) => {
-          const newX = pos.x + dx;
-          const newY = pos.y + dy;
+          const newCenterX = pos.x + dx;
+          const newCenterY = pos.y + dy;
           const obj = objects[sid];
           if (!obj) return;
+          const newX = newCenterX - obj.width / 2;
+          const newY = newCenterY - obj.height / 2;
           let patch: { x: number; y: number; frameId?: string } = { x: newX, y: newY };
-          if (obj.type !== 'frame') {
+
+          if (isFrameDrag) {
+            if (obj.type === 'frame') {
+              // Frame itself: only position
+            } else if (obj.frameId === id) {
+              patch.frameId = id;
+            }
+          } else if (obj.type !== 'frame') {
             const objRight = newX + obj.width;
             const objBottom = newY + obj.height;
             const overlapsFrame = (o: BoardObjectType) =>
@@ -349,10 +473,13 @@ export function BoardCanvas({
           updateObject(sid, patch);
         });
       } else {
-        const newX = e.target.x();
-        const newY = e.target.y();
+        const newCenterX = e.target.x();
+        const newCenterY = e.target.y();
         const obj = objects[id];
-        if (obj && obj.type !== 'frame') {
+        if (!obj) return;
+        const newX = newCenterX - obj.width / 2;
+        const newY = newCenterY - obj.height / 2;
+        if (obj.type !== 'frame') {
           const objRight = newX + obj.width;
           const objBottom = newY + obj.height;
           const overlapsFrame = (o: BoardObjectType) =>
@@ -380,6 +507,12 @@ export function BoardCanvas({
         }
       }
       groupDragStartPositions.current = new Map();
+      frameDragFrameIdRef.current = null;
+      if (frameDragRAFRef.current != null) {
+        cancelAnimationFrame(frameDragRAFRef.current);
+        frameDragRAFRef.current = null;
+      }
+      setFrameDragPositions(null);
     },
     [updateObject, objects, allObjects]
   );
@@ -388,12 +521,18 @@ export function BoardCanvas({
     (objId: string, _corner: string) => {
       const obj = objects[objId];
       if (!obj) return;
-      resizeStart.current = { objId, x: obj.x, y: obj.y, w: obj.width, h: obj.height };
+      const frameNode = objectNodeRefs.current.get(objId);
+      const frameX = frameNode ? frameNode.x() - obj.width / 2 : obj.x;
+      const frameY = frameNode ? frameNode.y() - obj.height / 2 : obj.y;
+      resizeStart.current = { objId, x: frameX, y: frameY, w: obj.width, h: obj.height };
       if (obj.type === 'frame') {
         const children = new Map<string, { x: number; y: number; width: number; height: number }>();
         allObjects.forEach((o) => {
           if (o.frameId === objId) {
-            children.set(o.id, { x: o.x, y: o.y, width: o.width, height: o.height });
+            const node = objectNodeRefs.current.get(o.id);
+            const x = node ? node.x() - o.width / 2 : o.x;
+            const y = node ? node.y() - o.height / 2 : o.y;
+            children.set(o.id, { x, y, width: o.width, height: o.height });
           }
         });
         resizeFrameChildrenStart.current = children;
@@ -495,6 +634,50 @@ export function BoardCanvas({
     [getPointerPosition, updateCursor, drawingConnection, selectionRect]
   );
 
+  // Attach Konva Transformer to selected node(s) for rotation (defer so refs are set after paint)
+  useEffect(() => {
+    const tr = transformerRef.current;
+    if (!tr) return;
+    const raf = requestAnimationFrame(() => {
+      const nodes = selectedIds
+        .map((id) => objectNodeRefs.current.get(id))
+        .filter((n): n is Konva.Group => n != null);
+      tr.nodes(nodes);
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [selectedIds]);
+
+  const handleTransformerTransform = useCallback(() => {
+    if (transformRAFRef.current != null) return;
+    transformRAFRef.current = requestAnimationFrame(() => {
+      setTransformVersion((v) => v + 1);
+      transformRAFRef.current = null;
+    });
+  }, []);
+
+  const handleTransformerTransformEnd = useCallback(
+    (_e: Konva.KonvaEventObject<Event>) => {
+      const tr = transformerRef.current;
+      if (!tr) return;
+      const nodes = tr.nodes();
+      nodes.forEach((node) => {
+        const id = selectedIds.find((sid) => objectNodeRefs.current.get(sid) === node);
+        if (!id) return;
+        const obj = objects[id];
+        if (!obj) return;
+        const cx = node.x();
+        const cy = node.y();
+        updateObject(id, {
+          x: cx - obj.width / 2,
+          y: cy - obj.height / 2,
+          rotation: node.rotation(),
+        });
+      });
+      setTransformVersion((v) => v + 1);
+    },
+    [selectedIds, objects, updateObject]
+  );
+
   const handleAnchorMouseDown = useCallback(
     (_objectId: string, _anchor: AnchorPosition) => {
       // No longer start drawing on mousedown; we start on click (mouseup) so user can click start, then click waypoints/destination
@@ -556,9 +739,14 @@ export function BoardCanvas({
             for (const obj of allObjects) {
               if (worldPos.x >= obj.x && worldPos.x <= obj.x + obj.width &&
                   worldPos.y >= obj.y && worldPos.y <= obj.y + obj.height) {
-                // Find nearest anchor
-                const anchorPositions: AnchorPosition[] = ['top', 'bottom', 'left', 'right'];
-                let bestAnchor: AnchorPosition = 'top';
+                // Find nearest anchor (star has 5 points; circle 4; rect 8)
+                const anchorPositions: AnchorPosition[] =
+                  obj.type === 'star'
+                    ? ['star-0', 'star-1', 'star-2', 'star-3', 'star-4']
+                    : obj.type === 'circle'
+                      ? ['top', 'bottom', 'left', 'right']
+                      : ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'];
+                let bestAnchor: AnchorPosition = anchorPositions[0];
                 let bestDist = Infinity;
                 for (const anchor of anchorPositions) {
                   const pt = getAnchorWorldPoint(obj, anchor);
@@ -794,10 +982,11 @@ export function BoardCanvas({
     return () => window.removeEventListener('paste', handlePaste);
   }, [createObject, userId, viewport, width, height, setSelection]);
 
-  // Compute the in-progress arrow points
+  // Compute the in-progress arrow points (use liveObjects so the start anchor
+  // stays glued to the object edge even while that object is being rotated)
   let drawingArrowPoints: number[] | null = null;
   if (drawingConnection) {
-    const fromObj = objects[drawingConnection.fromId];
+    const fromObj = liveObjects[drawingConnection.fromId];
     if (fromObj) {
       const from = getAnchorWorldPoint(fromObj, drawingConnection.fromAnchor);
       drawingArrowPoints = [
@@ -849,6 +1038,9 @@ export function BoardCanvas({
             const isSelected = selectedIds.includes(obj.id);
             const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
             const showSelectionBorder = isSelected && !isMultiSelect;
+            const dragPos = frameDragPositions?.get(obj.id);
+            const cx = dragPos ? dragPos.x : obj.x + obj.width / 2;
+            const cy = dragPos ? dragPos.y : obj.y + obj.height / 2;
             return (
               <Group
                 key={obj.id}
@@ -856,8 +1048,11 @@ export function BoardCanvas({
                   if (node) objectNodeRefs.current.set(obj.id, node);
                   else objectNodeRefs.current.delete(obj.id);
                 }}
-                x={obj.x}
-                y={obj.y}
+                x={cx}
+                y={cy}
+                offsetX={obj.width / 2}
+                offsetY={obj.height / 2}
+                rotation={obj.rotation ?? 0}
                 draggable={toolMode === 'select' && isSelected && !drawingConnection}
                 onClick={(e) => handleObjectClick(e, obj.id)}
                 onTap={(e) => handleObjectClick(e, obj.id)}
@@ -890,6 +1085,7 @@ export function BoardCanvas({
                     width={obj.width}
                     height={obj.height}
                     zoomScale={viewport.scale}
+                    objectType={obj.type}
                     onResizeStart={(corner) => handleResizeStart(obj.id, corner)}
                     onResizeMove={(corner, e) => handleResizeMove(obj.id, corner, e)}
                     onResizeEnd={(corner, e) => handleResizeEnd(obj.id, corner, e)}
@@ -904,7 +1100,7 @@ export function BoardCanvas({
             <ConnectionLine
               key={conn.id}
               connection={conn}
-              objects={objects}
+              objects={liveObjects}
               zoomScale={viewport.scale}
               isSelected={selectedConnectionId === conn.id}
               onSelect={handleConnectionSelect}
@@ -934,6 +1130,9 @@ export function BoardCanvas({
             const isSelected = selectedIds.includes(obj.id);
             const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
             const showSelectionBorder = isSelected && !isMultiSelect;
+            const dragPos = frameDragPositions?.get(obj.id);
+            const cx = dragPos ? dragPos.x : obj.x + obj.width / 2;
+            const cy = dragPos ? dragPos.y : obj.y + obj.height / 2;
             return (
               <Group
                 key={obj.id}
@@ -941,8 +1140,11 @@ export function BoardCanvas({
                   if (node) objectNodeRefs.current.set(obj.id, node);
                   else objectNodeRefs.current.delete(obj.id);
                 }}
-                x={obj.x}
-                y={obj.y}
+                x={cx}
+                y={cy}
+                offsetX={obj.width / 2}
+                offsetY={obj.height / 2}
+                rotation={obj.rotation ?? 0}
                 draggable={toolMode === 'select' && isSelected && !drawingConnection}
                 onClick={(e) => handleObjectClick(e, obj.id)}
                 onTap={(e) => handleObjectClick(e, obj.id)}
@@ -975,6 +1177,7 @@ export function BoardCanvas({
                     width={obj.width}
                     height={obj.height}
                     zoomScale={viewport.scale}
+                    objectType={obj.type}
                     onResizeStart={(corner) => handleResizeStart(obj.id, corner)}
                     onResizeMove={(corner, e) => handleResizeMove(obj.id, corner, e)}
                     onResizeEnd={(corner, e) => handleResizeEnd(obj.id, corner, e)}
@@ -984,19 +1187,47 @@ export function BoardCanvas({
             );
           })}
 
-          {/* Multi-select: single bounding box around entire selection */}
-          {selectionBounds && (
-            <Rect
-              x={selectionBounds.x}
-              y={selectionBounds.y}
-              width={selectionBounds.width}
-              height={selectionBounds.height}
-              fill="rgba(74, 124, 89, 0.06)"
-              stroke="#4a7c59"
-              strokeWidth={2 / viewport.scale}
-              dash={[6 / viewport.scale, 3 / viewport.scale]}
-              listening={false}
+          {/* Rotation handle: fixed screen pixels so it stays same size at any zoom (Transformer uses screen space for anchors) */}
+          {selectedIds.length > 0 && (
+            <Transformer
+              ref={transformerRef}
+              resizeEnabled={false}
+              rotateEnabled={true}
+              rotateAnchorCursor="grab"
+              rotateLineVisible={false}
+              rotateAnchorOffset={8}
+              borderStrokeWidth={0}
+              anchorSize={10}
+              anchorStroke="#fff"
+              anchorFill="#4a7c59"
+              anchorStrokeWidth={1}
+              onTransform={handleTransformerTransform}
+              onTransformEnd={handleTransformerTransformEnd}
             />
+          )}
+
+          {/* Multi-select: temporary “selector” object – same Group/offset/rotation as real objects so it’s centered and rotates */}
+          {selectionBox && (
+            <Group
+              x={selectionBox.x + selectionBox.width / 2}
+              y={selectionBox.y + selectionBox.height / 2}
+              offsetX={selectionBox.width / 2}
+              offsetY={selectionBox.height / 2}
+              rotation={selectionBox.rotation}
+              listening={false}
+            >
+              <Rect
+                x={0}
+                y={0}
+                width={selectionBox.width}
+                height={selectionBox.height}
+                fill="rgba(74, 124, 89, 0.06)"
+                stroke="#4a7c59"
+                strokeWidth={2 / viewport.scale}
+                dash={[6 / viewport.scale, 3 / viewport.scale]}
+                listening={false}
+              />
+            </Group>
           )}
 
           {/* Area selection rectangle */}

@@ -32,7 +32,7 @@ export function BoardView() {
     user?.uid,
     user?.displayName ?? 'Anonymous'
   );
-  const { viewport, setViewport, selectedIds } = useBoardStore();
+  const { viewport, setViewport, selectedIds, setSelection } = useBoardStore();
 
   const selectedObject = selectedIds.length === 1 ? objects[selectedIds[0]] : null;
 
@@ -101,6 +101,12 @@ export function BoardView() {
     });
   };
 
+  const clearSelectionOnHotkey = () => {
+    const ids = useBoardStore.getState().selectedIds;
+    ids.forEach((id) => updateObject(id, { selectedBy: null, selectedByName: null }));
+    setSelection([]);
+  };
+
   const handleEditCancel = () => {
     if (boardId) clearPersistedEditState(boardId);
     setEditingId(null);
@@ -119,22 +125,26 @@ export function BoardView() {
   };
 
   // Click outside the edit overlay (canvas, empty area, etc.) → save and close.
-  // Applies to both sticky notes and text fields (same overlay). Tab switch / off-window blur → persist only.
+  // Listener on document so we always receive the event (Konva canvas can consume it on the wrapper).
+  // Applies to both sticky notes and text fields.
   useEffect(() => {
-    const wrapper = wrapperRef.current;
-    if (!wrapper) return;
-    const handleMouseDown = (e: MouseEvent) => {
-      if (!editingId) return;
-      const target = e.target as Node;
-      if (editOverlayContainerRef.current?.contains(target)) return;
+    if (!editingId) return;
+    const handlePointerDown = (e: MouseEvent | TouchEvent) => {
+      const target = (e.target as Node) ?? null;
+      const container = editOverlayContainerRef.current;
+      if (container && target && container.contains(target)) return;
       const draft = latestDraftRef.current ?? objects[editingId]?.text ?? '';
       updateObject(editingId, { text: draft });
       clearPersistedEditState(boardId ?? '');
       setEditingId(null);
       setRestoredDraft(null);
     };
-    wrapper.addEventListener('mousedown', handleMouseDown, true);
-    return () => wrapper.removeEventListener('mousedown', handleMouseDown, true);
+    document.addEventListener('mousedown', handlePointerDown as (e: MouseEvent) => void, true);
+    document.addEventListener('touchstart', handlePointerDown as (e: TouchEvent) => void, true);
+    return () => {
+      document.removeEventListener('mousedown', handlePointerDown as (e: MouseEvent) => void, true);
+      document.removeEventListener('touchstart', handlePointerDown as (e: TouchEvent) => void, true);
+    };
   }, [editingId, boardId, objects, updateObject]);
 
   if (!user) {
@@ -201,6 +211,7 @@ export function BoardView() {
               onSave={handleTextSave}
               onCancel={handleEditCancel}
               onDraftChange={handleDraftChange}
+              latestDraftRef={latestDraftRef}
             />
           </div>
           <CursorOverlay
@@ -234,7 +245,7 @@ export function BoardView() {
               </div>
             </div>
           )}
-          <Toolbar />
+          <Toolbar onHotkeyPress={clearSelectionOnHotkey} />
         </div>
       </div>
     </div>

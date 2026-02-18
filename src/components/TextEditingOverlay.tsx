@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import type { BoardObject } from '../types/board';
 import { computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../lib/textParser';
 
@@ -11,6 +11,8 @@ interface TextEditingOverlayProps {
   onSave: (id: string, text: string, headingLevel?: number) => void;
   onCancel: () => void;
   onDraftChange?: (text: string) => void;
+  /** Ref updated on every keystroke so parent can read latest draft when saving on click-outside */
+  latestDraftRef?: React.MutableRefObject<string>;
 }
 
 export function TextEditingOverlay({
@@ -20,6 +22,7 @@ export function TextEditingOverlay({
   onSave,
   onCancel,
   onDraftChange,
+  latestDraftRef,
 }: TextEditingOverlayProps) {
   const [text, setText] = useState(
     () => (initialDraft !== undefined ? initialDraft : obj?.text ?? '')
@@ -36,10 +39,12 @@ export function TextEditingOverlay({
     }
     if (openedIdRef.current !== obj.id) {
       openedIdRef.current = obj.id;
-      setText(initialDraft !== undefined ? initialDraft : obj.text ?? '');
+      const next = initialDraft !== undefined ? initialDraft : obj.text ?? '';
+      setText(next);
+      if (latestDraftRef) latestDraftRef.current = next;
       setTimeout(() => inputRef.current?.focus(), 0);
     }
-  }, [obj, initialDraft]);
+  }, [obj, initialDraft, latestDraftRef]);
 
   useEffect(() => {
     if (!onDraftChange || !obj) return;
@@ -63,35 +68,6 @@ export function TextEditingOverlay({
     const sh = obj.height * scale;
     if (!Number.isFinite(sw) || !Number.isFinite(sh) || sw < 1 || sh < 1) onCancel();
   }, [obj, viewport.scale, viewport.x, viewport.y, onCancel]);
-
-  const wrapSelection = useCallback((before: string, after: string) => {
-    const ta = inputRef.current;
-    if (!ta) return;
-    const start = ta.selectionStart;
-    const end = ta.selectionEnd;
-    const selected = text.slice(start, end);
-    const newText = text.slice(0, start) + before + selected + after + text.slice(end);
-    setText(newText);
-    setTimeout(() => {
-      ta.focus();
-      ta.selectionStart = start + before.length;
-      ta.selectionEnd = end + before.length;
-    }, 0);
-  }, [text]);
-
-  const prefixLine = useCallback((prefix: string) => {
-    const ta = inputRef.current;
-    if (!ta) return;
-    const pos = ta.selectionStart;
-    const lineStart = text.lastIndexOf('\n', pos - 1) + 1;
-    const newText = text.slice(0, lineStart) + prefix + text.slice(lineStart);
-    setText(newText);
-    setTimeout(() => {
-      ta.focus();
-      ta.selectionStart = pos + prefix.length;
-      ta.selectionEnd = pos + prefix.length;
-    }, 0);
-  }, [text]);
 
   if (!obj || (obj.type !== 'stickyNote' && obj.type !== 'text')) return null;
 
@@ -173,28 +149,6 @@ export function TextEditingOverlay({
         onMouseDown={(e) => e.preventDefault()}
       >
         <button
-          className="text-edit-btn"
-          onClick={() => wrapSelection('**', '**')}
-          title="Bold"
-        >
-          B
-        </button>
-        <button
-          className="text-edit-btn"
-          style={{ fontStyle: 'italic' }}
-          onClick={() => wrapSelection('*', '*')}
-          title="Italic"
-        >
-          I
-        </button>
-        <button
-          className="text-edit-btn"
-          onClick={() => prefixLine('- ')}
-          title="List"
-        >
-          List
-        </button>
-        <button
           className="text-edit-btn text-edit-btn-done"
           onClick={handleDone}
           title="Save and close"
@@ -206,7 +160,11 @@ export function TextEditingOverlay({
         ref={inputRef}
         className="text-editing-input"
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          const next = e.target.value;
+          setText(next);
+          if (latestDraftRef) latestDraftRef.current = next;
+        }}
         onBlur={handleBlur}
         onKeyDown={handleKeyDown}
         style={{

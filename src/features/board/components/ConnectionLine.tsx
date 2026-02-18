@@ -1,7 +1,8 @@
 import React from 'react';
 import { Group, Arrow, Circle } from 'react-konva';
 import type Konva from 'konva';
-import type { Connection, BoardObject, AnchorPosition } from '../../../types/board';
+import type { Connection, BoardObject } from '../../../types/board';
+import { getAnchorWorldPoint } from '../utils/anchorPoint';
 
 interface ConnectionLineProps {
   connection: Connection;
@@ -12,20 +13,6 @@ interface ConnectionLineProps {
   onWaypointDrag?: (connId: string, waypointIndex: number, x: number, y: number) => void;
   onWaypointDragEnd?: (connId: string, points: number[]) => void;
   onDoubleClick?: (connId: string, x: number, y: number) => void;
-}
-
-function getAnchorPoint(obj: BoardObject, anchor: AnchorPosition): { x: number; y: number } {
-  const { x, y, width: w, height: h } = obj;
-  switch (anchor) {
-    case 'top': return { x: x + w / 2, y };
-    case 'bottom': return { x: x + w / 2, y: y + h };
-    case 'left': return { x, y: y + h / 2 };
-    case 'right': return { x: x + w, y: y + h / 2 };
-    case 'top-left': return { x, y };
-    case 'top-right': return { x: x + w, y };
-    case 'bottom-left': return { x, y: y + h };
-    case 'bottom-right': return { x: x + w, y: y + h };
-  }
 }
 
 export function ConnectionLine({
@@ -42,8 +29,8 @@ export function ConnectionLine({
   const toObj = objects[connection.toId];
   if (!fromObj || !toObj) return null;
 
-  const from = getAnchorPoint(fromObj, connection.fromAnchor);
-  const to = getAnchorPoint(toObj, connection.toAnchor);
+  const from = getAnchorWorldPoint(fromObj, connection.fromAnchor);
+  const to = getAnchorWorldPoint(toObj, connection.toAnchor);
 
   // Scale arrow props so they look consistent on screen
   const sw = 2 / zoomScale;
