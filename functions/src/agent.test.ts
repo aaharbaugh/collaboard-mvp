@@ -31,10 +31,15 @@ jest.mock('openai', () => ({
 // ---------------------------------------------------------------------------
 const mockGenerationEnd = jest.fn();
 const mockGenerationFn = jest.fn().mockReturnValue({ end: mockGenerationEnd });
+const mockSpanEnd = jest.fn();
+const mockSpan = jest.fn().mockReturnValue({ end: mockSpanEnd });
+const mockScore = jest.fn();
 const mockTraceUpdate = jest.fn();
 const mockTraceFn = jest.fn().mockReturnValue({
   generation: mockGenerationFn,
   update: mockTraceUpdate,
+  span: mockSpan,
+  score: mockScore,
 });
 const mockFlushAsync = jest.fn().mockResolvedValue(undefined);
 
@@ -55,6 +60,8 @@ jest.mock('./agentTools', () => ({
   createConnector: jest.fn().mockResolvedValue('conn-id'),
   createMultiPointConnector: jest.fn().mockResolvedValue(['conn-id']),
   connectInSequence: jest.fn().mockResolvedValue(['conn-id']),
+  createBatch: jest.fn().mockResolvedValue([{ tempId: 't1', actualId: 'batch-id' }]),
+  connectBatch: jest.fn().mockResolvedValue(['conn-id']),
   moveObject: jest.fn().mockResolvedValue(undefined),
   resizeObject: jest.fn().mockResolvedValue(undefined),
   updateText: jest.fn().mockResolvedValue(undefined),

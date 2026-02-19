@@ -18,7 +18,7 @@ export interface ConnectorOptions {
   color?: string;
   /** Waypoints in {x,y} format; converted to flat number[] for Firebase */
   points?: WaypointXY[];
-  /** If true, points[0] is absolute {x,y}, points[1..] are {dx,dy} relative to previous. Resolved to absolute before storing. */
+  /** If true, points[0] is absolute {x,y}, points[1..] are {dx,dy} relative to previous. */
   pointsRelative?: boolean;
 }
 
@@ -30,6 +30,24 @@ export interface MultiPointOptions {
 export interface SequenceOptions {
   color?: string;
   direction?: 'forward' | 'bidirectional';
+}
+
+/** Minimal object info needed for connection routing and layout calculations. */
+export type BoardObjectLite = { x: number; y: number; width: number; height: number };
+
+/** Per-command cache of board objects to avoid redundant Firebase reads. */
+export type ObjectCache = Map<string, BoardObjectLite>;
+
+export interface BatchCreateOp {
+  tempId: string;
+  action: 'createStickyNote' | 'createShape' | 'createFrame';
+  params: Record<string, unknown>;
+}
+
+export interface BatchConnectOp {
+  fromId: string;
+  toId: string;
+  options?: ConnectorOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +114,7 @@ export function autoSelectAnchors(
     : { fromAnchor: 'top', toAnchor: 'bottom' };
 }
 
-/** Anchor offset from center (half-size). Used for resolving relative waypoints from from-anchor. */
+/** Anchor offset from center (half-size). */
 function anchorOffset(w: number, h: number, anchor: string): { x: number; y: number } {
   switch (anchor) {
     case 'top': return { x: 0, y: -h / 2 };
@@ -119,6 +137,61 @@ export function getAnchorWorldPoint(
   const cy = obj.y + obj.height / 2;
   const off = anchorOffset(obj.width, obj.height, anchor);
   return { x: cx + off.x, y: cy + off.y };
+}
+
+/** Convert ConnectorOptions.points to flat number[] or undefined. */
+function flattenWaypoints(options: ConnectorOptions): number[] | undefined {
+  if (!options.points || options.points.length === 0) return undefined;
+  if (options.pointsRelative) {
+    const abs: WaypointXY[] = [];
+    for (let i = 0; i < options.points.length; i++) {
+      const p = options.points[i];
+      if (i === 0) {
+        abs.push({ x: p.x, y: p.y });
+      } else {
+        const prev = abs[i - 1];
+        abs.push({ x: prev.x + p.x, y: prev.y + p.y });
+      }
+    }
+    return abs.flatMap((p) => [p.x, p.y]);
+  }
+  return options.points.flatMap((p) => [p.x, p.y]);
+}
+
+// ---------------------------------------------------------------------------
+// Internal: write a single connection record (no Firebase object read)
+// ---------------------------------------------------------------------------
+
+async function _writeConnection(
+  boardId: string,
+  fromId: string,
+  toId: string,
+  fromObj: BoardObjectLite,
+  toObj: BoardObjectLite,
+  options: ConnectorOptions,
+  userId: string
+): Promise<string> {
+  const autoAnchors = autoSelectAnchors(fromObj, toObj);
+  const fromAnchor = options.fromAnchor ?? autoAnchors.fromAnchor;
+  const toAnchor = options.toAnchor ?? autoAnchors.toAnchor;
+
+  const id = randomUUID();
+  const data: Record<string, unknown> = {
+    id,
+    fromId,
+    toId,
+    fromAnchor,
+    toAnchor,
+    color: options.color ? mapColorNameToHex(options.color) : BOARD_PALETTE_HEX[2],
+    createdBy: userId,
+    createdAt: Date.now(),
+  };
+
+  const flat = flattenWaypoints(options);
+  if (flat) data['points'] = flat;
+
+  await admin.database().ref(`boards/${boardId}/connections/${id}`).set(data);
+  return id;
 }
 
 // ---------------------------------------------------------------------------
@@ -200,6 +273,77 @@ export async function createFrame(
 }
 
 // ---------------------------------------------------------------------------
+// Batch creation — single multi-path Firebase write for multiple objects
+// ---------------------------------------------------------------------------
+
+export async function createBatch(
+  boardId: string,
+  operations: BatchCreateOp[],
+  userId: string,
+  cache?: ObjectCache
+): Promise<{ tempId: string; actualId: string }[]> {
+  if (operations.length === 0) return [];
+
+  const updates: Record<string, unknown> = {};
+  const results: { tempId: string; actualId: string }[] = [];
+
+  for (const op of operations) {
+    const id = randomUUID();
+    const x = Number(op.params['x'] ?? 0);
+    const y = Number(op.params['y'] ?? 0);
+    let w = 160;
+    let h = 120;
+    let obj: Record<string, unknown>;
+
+    switch (op.action) {
+      case 'createStickyNote': {
+        w = 160; h = 120;
+        obj = {
+          id, type: 'stickyNote',
+          text: String(op.params['text'] ?? ''),
+          x, y, width: w, height: h,
+          color: mapColorNameToHex(String(op.params['color'] ?? 'yellow')),
+          createdBy: userId, createdAt: Date.now(),
+        };
+        break;
+      }
+      case 'createShape': {
+        w = Number(op.params['width'] ?? 150);
+        h = Number(op.params['height'] ?? 100);
+        obj = {
+          id, type: String(op.params['type'] ?? 'rectangle'),
+          x, y, width: w, height: h,
+          color: mapColorNameToHex(String(op.params['color'] ?? 'blue')),
+          createdBy: userId, createdAt: Date.now(),
+        };
+        break;
+      }
+      case 'createFrame': {
+        w = Number(op.params['width'] ?? 320);
+        h = Number(op.params['height'] ?? 220);
+        obj = {
+          id, type: 'frame',
+          text: String(op.params['title'] ?? ''),
+          x, y, width: w, height: h,
+          color: '#12121a',
+          createdBy: userId, createdAt: Date.now(),
+        };
+        break;
+      }
+      default:
+        throw new Error(`Unknown batch action: ${String(op.action)}`);
+    }
+
+    updates[`boards/${boardId}/objects/${id}`] = obj;
+    cache?.set(id, { x, y, width: w, height: h });
+    results.push({ tempId: op.tempId, actualId: id });
+  }
+
+  await admin.database().ref().update(updates);
+  return results;
+}
+
+// ---------------------------------------------------------------------------
 // Connection creation
 // ---------------------------------------------------------------------------
 
@@ -214,8 +358,7 @@ export async function createConnector(
     .database()
     .ref(`boards/${boardId}/objects`)
     .once('value');
-  const objects: Record<string, { x: number; y: number; width: number; height: number }> =
-    objectsSnap.val() ?? {};
+  const objects: Record<string, BoardObjectLite> = objectsSnap.val() ?? {};
 
   const fromObj = objects[fromId];
   const toObj = objects[toId];
@@ -223,45 +366,7 @@ export async function createConnector(
   if (!fromObj) throw new Error(`Object not found: ${fromId}`);
   if (!toObj) throw new Error(`Object not found: ${toId}`);
 
-  const autoAnchors = autoSelectAnchors(fromObj, toObj);
-  const fromAnchor = options.fromAnchor ?? autoAnchors.fromAnchor;
-  const toAnchor = options.toAnchor ?? autoAnchors.toAnchor;
-
-  const id = randomUUID();
-  const data: Record<string, unknown> = {
-    id,
-    fromId,
-    toId,
-    fromAnchor,
-    toAnchor,
-    color: options.color ? mapColorNameToHex(options.color) : BOARD_PALETTE_HEX[2],
-    createdBy: userId,
-    createdAt: Date.now(),
-  };
-
-  // Convert waypoints to flat number[] for Firebase (Connection.points type)
-  if (options.points && options.points.length > 0) {
-    let flat: number[];
-    if (options.pointsRelative) {
-      const abs: WaypointXY[] = [];
-      for (let i = 0; i < options.points.length; i++) {
-        const p = options.points[i];
-        if (i === 0) {
-          abs.push({ x: p.x, y: p.y });
-        } else {
-          const prev = abs[i - 1];
-          abs.push({ x: prev.x + p.x, y: prev.y + p.y });
-        }
-      }
-      flat = abs.flatMap((p) => [p.x, p.y]);
-    } else {
-      flat = options.points.flatMap((p) => [p.x, p.y]);
-    }
-    data['points'] = flat;
-  }
-
-  await admin.database().ref(`boards/${boardId}/connections/${id}`).set(data);
-  return id;
+  return _writeConnection(boardId, fromId, toId, fromObj, toObj, options, userId);
 }
 
 export async function createMultiPointConnector(
@@ -274,12 +379,12 @@ export async function createMultiPointConnector(
     throw new Error('Need at least 2 objects to connect');
   }
 
+  // Read objects once for all connections
   const objectsSnap = await admin
     .database()
     .ref(`boards/${boardId}/objects`)
     .once('value');
-  const objects: Record<string, { x: number; y: number; width: number; height: number }> =
-    objectsSnap.val() ?? {};
+  const objects: Record<string, BoardObjectLite> = objectsSnap.val() ?? {};
 
   const missing = objectIds.find((id) => !objects[id]);
   if (missing) throw new Error(`Object not found: ${missing}`);
@@ -299,10 +404,8 @@ export async function createMultiPointConnector(
       waypoints = [{ x: midX, y: midY + 30 }];
     }
 
-    const connId = await createConnector(
-      boardId,
-      fromId,
-      toId,
+    const connId = await _writeConnection(
+      boardId, fromId, toId, fromObj, toObj,
       { color: options.color, points: waypoints },
       userId
     );
@@ -322,13 +425,22 @@ export async function connectInSequence(
     throw new Error('Need at least 2 objects to connect');
   }
 
+  // Read objects once (instead of once per connector)
+  const objectsSnap = await admin
+    .database()
+    .ref(`boards/${boardId}/objects`)
+    .once('value');
+  const objects: Record<string, BoardObjectLite> = objectsSnap.val() ?? {};
+
   const connectionIds: string[] = [];
 
   for (let i = 0; i < objectIds.length - 1; i++) {
-    const id = await createConnector(
-      boardId,
-      objectIds[i],
-      objectIds[i + 1],
+    const fromId = objectIds[i];
+    const toId = objectIds[i + 1];
+    if (!objects[fromId]) throw new Error(`Object not found: ${fromId}`);
+    if (!objects[toId]) throw new Error(`Object not found: ${toId}`);
+    const id = await _writeConnection(
+      boardId, fromId, toId, objects[fromId], objects[toId],
       { color: options.color },
       userId
     );
@@ -337,10 +449,12 @@ export async function connectInSequence(
 
   if (options.direction === 'bidirectional') {
     for (let i = objectIds.length - 1; i > 0; i--) {
-      const id = await createConnector(
-        boardId,
-        objectIds[i],
-        objectIds[i - 1],
+      const fromId = objectIds[i];
+      const toId = objectIds[i - 1];
+      if (!objects[fromId]) throw new Error(`Object not found: ${fromId}`);
+      if (!objects[toId]) throw new Error(`Object not found: ${toId}`);
+      const id = await _writeConnection(
+        boardId, fromId, toId, objects[fromId], objects[toId],
         { color: options.color },
         userId
       );
@@ -349,6 +463,118 @@ export async function connectInSequence(
   }
 
   return connectionIds;
+}
+
+// ---------------------------------------------------------------------------
+// Batch connection — single read + single multi-path Firebase write
+// ---------------------------------------------------------------------------
+
+export async function connectBatch(
+  boardId: string,
+  connections: BatchConnectOp[],
+  userId: string,
+  cache?: ObjectCache
+): Promise<string[]> {
+  if (connections.length === 0) return [];
+
+  // Determine if all needed IDs are in cache
+  const allIds = [...new Set(connections.flatMap((c) => [c.fromId, c.toId]))];
+  const needFetch = !cache || allIds.some((id) => !cache.has(id));
+
+  let objects: Record<string, BoardObjectLite>;
+
+  if (needFetch) {
+    const snap = await admin.database().ref(`boards/${boardId}/objects`).once('value');
+    const raw: Record<string, unknown> = snap.val() ?? {};
+    objects = {};
+    for (const [id, obj] of Object.entries(raw)) {
+      if (obj && typeof obj === 'object') {
+        const o = obj as Record<string, unknown>;
+        const lite: BoardObjectLite = {
+          x: Number(o['x'] ?? 0),
+          y: Number(o['y'] ?? 0),
+          width: Number(o['width'] ?? 160),
+          height: Number(o['height'] ?? 120),
+        };
+        objects[id] = lite;
+        cache?.set(id, lite);
+      }
+    }
+  } else {
+    objects = Object.fromEntries(cache!.entries());
+  }
+
+  const updates: Record<string, unknown> = {};
+  const connectionIds: string[] = [];
+
+  for (const conn of connections) {
+    const fromObj = objects[conn.fromId];
+    const toObj = objects[conn.toId];
+    if (!fromObj) throw new Error(`Object not found: ${conn.fromId}`);
+    if (!toObj) throw new Error(`Object not found: ${conn.toId}`);
+
+    const options = conn.options ?? {};
+    const autoAnchors = autoSelectAnchors(fromObj, toObj);
+    const fromAnchor = options.fromAnchor ?? autoAnchors.fromAnchor;
+    const toAnchor = options.toAnchor ?? autoAnchors.toAnchor;
+
+    const id = randomUUID();
+    connectionIds.push(id);
+
+    const data: Record<string, unknown> = {
+      id,
+      fromId: conn.fromId,
+      toId: conn.toId,
+      fromAnchor,
+      toAnchor,
+      color: options.color ? mapColorNameToHex(options.color) : BOARD_PALETTE_HEX[2],
+      createdBy: userId,
+      createdAt: Date.now(),
+    };
+
+    const flat = flattenWaypoints(options);
+    if (flat) data['points'] = flat;
+
+    updates[`boards/${boardId}/connections/${id}`] = data;
+  }
+
+  await admin.database().ref().update(updates);
+  return connectionIds;
+}
+
+// ---------------------------------------------------------------------------
+// Object deletion
+// ---------------------------------------------------------------------------
+
+export async function deleteObjects(
+  boardId: string,
+  objectIds: string[]
+): Promise<{ deleted: number; connectionsRemoved: number }> {
+  if (objectIds.length === 0) return { deleted: 0, connectionsRemoved: 0 };
+
+  const updates: Record<string, null> = {};
+  for (const id of objectIds) {
+    updates[`boards/${boardId}/objects/${id}`] = null;
+  }
+
+  // Also delete any connections that reference these objects
+  const connSnap = await admin.database().ref(`boards/${boardId}/connections`).once('value');
+  const connections: Record<string, unknown> = connSnap.val() ?? {};
+  const objSet = new Set(objectIds);
+  let connectionsRemoved = 0;
+
+  for (const [connId, conn] of Object.entries(connections)) {
+    if (conn && typeof conn === 'object') {
+      const c = conn as Record<string, unknown>;
+      if (objSet.has(c['fromId'] as string) || objSet.has(c['toId'] as string)) {
+        updates[`boards/${boardId}/connections/${connId}`] = null;
+        connectionsRemoved++;
+      }
+    }
+  }
+
+  await admin.database().ref().update(updates as Record<string, unknown>);
+  return { deleted: objectIds.length, connectionsRemoved };
 }
 
 // ---------------------------------------------------------------------------
@@ -443,7 +669,6 @@ export async function getBoardContext(
   let objectIds: Set<string>;
   if (options?.selectedIds?.length) {
     objectIds = new Set(options.selectedIds);
-    // Include connections that reference any selected object
     for (const conn of Object.values(connections)) {
       if (conn && conn.fromId && conn.toId && (objectIds.has(conn.fromId as string) || objectIds.has(conn.toId as string))) {
         objectIds.add(conn.fromId as string);

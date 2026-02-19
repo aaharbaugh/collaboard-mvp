@@ -8,6 +8,8 @@ import {
   createConnector,
   createMultiPointConnector,
   connectInSequence,
+  createBatch,
+  connectBatch,
   moveObject,
   resizeObject,
   updateText,
@@ -376,6 +378,151 @@ describe('connectInSequence', () => {
     const ids = await connectInSequence('b1', ['a', 'b', 'c'], {}, 'u1');
     expect(Array.isArray(ids)).toBe(true);
     expect(ids).toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createBatch
+// ---------------------------------------------------------------------------
+describe('createBatch', () => {
+  it('returns empty array for empty operations', async () => {
+    const result = await createBatch('b1', [], 'u1');
+    expect(result).toEqual([]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('creates multiple objects in a single multi-path write', async () => {
+    const ops = [
+      { tempId: 's1', action: 'createStickyNote' as const, params: { text: 'Note A', x: 100, y: 100, color: 'yellow' } },
+      { tempId: 's2', action: 'createStickyNote' as const, params: { text: 'Note B', x: 300, y: 100, color: 'pink' } },
+    ];
+    const result = await createBatch('b1', ops, 'u1');
+
+    // Single update call (multi-path write)
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockSet).not.toHaveBeenCalled();
+
+    // Returns tempId→actualId mapping
+    expect(result).toHaveLength(2);
+    expect(result[0].tempId).toBe('s1');
+    expect(result[0].actualId).toBeTruthy();
+    expect(result[1].tempId).toBe('s2');
+  });
+
+  it('writes correct stickyNote shape in batch', async () => {
+    await createBatch('b1', [
+      { tempId: 't1', action: 'createStickyNote' as const, params: { text: 'Hi', x: 50, y: 60, color: 'green' } },
+    ], 'u1');
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const objData = Object.values(updateArg)[0] as Record<string, unknown>;
+    expect(objData.type).toBe('stickyNote');
+    expect(objData.text).toBe('Hi');
+    expect(objData.x).toBe(50);
+    expect(objData.y).toBe(60);
+    expect(objData.width).toBe(160);
+    expect(objData.height).toBe(120);
+    expect(objData.color).toBe('#d4e4bc');
+  });
+
+  it('writes correct frame shape in batch', async () => {
+    await createBatch('b1', [
+      { tempId: 'f1', action: 'createFrame' as const, params: { title: 'My Frame', x: 0, y: 0, width: 500, height: 400 } },
+    ], 'u1');
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const objData = Object.values(updateArg)[0] as Record<string, unknown>;
+    expect(objData.type).toBe('frame');
+    expect(objData.text).toBe('My Frame');
+    expect(objData.width).toBe(500);
+  });
+
+  it('populates cache with created objects', async () => {
+    const cache = new Map<string, { x: number; y: number; width: number; height: number }>();
+    const result = await createBatch('b1', [
+      { tempId: 's1', action: 'createStickyNote' as const, params: { text: 'A', x: 10, y: 20, color: 'blue' } },
+    ], 'u1', cache);
+
+    expect(cache.has(result[0].actualId)).toBe(true);
+    expect(cache.get(result[0].actualId)).toMatchObject({ x: 10, y: 20, width: 160, height: 120 });
+  });
+
+  it('throws for unknown action', async () => {
+    await expect(
+      createBatch('b1', [
+        { tempId: 't1', action: 'createStickyNote' as const, params: { text: '', x: 0, y: 0 } },
+      ].map(op => ({ ...op, action: 'unknownAction' as 'createStickyNote' })), 'u1')
+    ).rejects.toThrow('Unknown batch action');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// connectBatch
+// ---------------------------------------------------------------------------
+describe('connectBatch', () => {
+  const objs = {
+    a: { id: 'a', x: 0, y: 0, width: 100, height: 80 },
+    b: { id: 'b', x: 200, y: 0, width: 100, height: 80 },
+    c: { id: 'c', x: 400, y: 0, width: 100, height: 80 },
+  };
+
+  beforeEach(() => {
+    mockOnce.mockResolvedValue({ val: () => objs });
+  });
+
+  it('returns empty array for empty connections', async () => {
+    const result = await connectBatch('b1', [], 'u1');
+    expect(result).toEqual([]);
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('creates multiple connections in a single multi-path write', async () => {
+    const result = await connectBatch('b1', [
+      { fromId: 'a', toId: 'b' },
+      { fromId: 'b', toId: 'c' },
+    ], 'u1');
+
+    // Single update call (multi-path write)
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockSet).not.toHaveBeenCalled();
+    expect(result).toHaveLength(2);
+  });
+
+  it('reads objects only once regardless of connection count', async () => {
+    await connectBatch('b1', [
+      { fromId: 'a', toId: 'b' },
+      { fromId: 'b', toId: 'c' },
+      { fromId: 'a', toId: 'c' },
+    ], 'u1');
+
+    // Only one Firebase read despite three connections
+    expect(mockOnce).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips Firebase read when all IDs are in cache', async () => {
+    const cache = new Map([
+      ['a', { x: 0, y: 0, width: 100, height: 80 }],
+      ['b', { x: 200, y: 0, width: 100, height: 80 }],
+    ]);
+    await connectBatch('b1', [{ fromId: 'a', toId: 'b' }], 'u1', cache);
+
+    expect(mockOnce).not.toHaveBeenCalled();
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-selects anchors based on positions', async () => {
+    await connectBatch('b1', [{ fromId: 'a', toId: 'b' }], 'u1');
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const connData = Object.values(updateArg)[0] as Record<string, unknown>;
+    expect(connData.fromAnchor).toBe('right');
+    expect(connData.toAnchor).toBe('left');
+  });
+
+  it('throws when an object ID is not found', async () => {
+    await expect(
+      connectBatch('b1', [{ fromId: 'a', toId: 'missing' }], 'u1')
+    ).rejects.toThrow('missing');
   });
 });
 
