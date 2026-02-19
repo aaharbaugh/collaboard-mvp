@@ -1,10 +1,13 @@
 import * as admin from 'firebase-admin';
 import {
+  BOARD_PALETTE_HEX,
+  PALETTE,
   mapColorNameToHex,
   autoSelectAnchors,
   createStickyNote,
   createShape,
   createFrame,
+  createText,
   createConnector,
   createMultiPointConnector,
   connectInSequence,
@@ -14,6 +17,11 @@ import {
   resizeObject,
   updateText,
   changeColor,
+  addToFrame,
+  setLayer,
+  rotateObject,
+  writeAgentStatus,
+  clearAgentStatus,
   getBoardState,
 } from './agentTools';
 
@@ -22,8 +30,14 @@ import {
 // ---------------------------------------------------------------------------
 const mockSet = jest.fn().mockResolvedValue(undefined);
 const mockUpdate = jest.fn().mockResolvedValue(undefined);
+const mockRemove = jest.fn().mockResolvedValue(undefined);
 const mockOnce = jest.fn();
-const mockRef = jest.fn().mockReturnValue({ set: mockSet, update: mockUpdate, once: mockOnce });
+const mockRef = jest.fn().mockReturnValue({
+  set: mockSet,
+  update: mockUpdate,
+  remove: mockRemove,
+  once: mockOnce,
+});
 const mockDb = { ref: mockRef };
 
 jest.mock('firebase-admin', () => ({
@@ -42,8 +56,28 @@ beforeEach(() => {
   jest.clearAllMocks();
   idCounter = 0;
   (admin.database as unknown as jest.Mock).mockReturnValue(mockDb);
-  mockRef.mockReturnValue({ set: mockSet, update: mockUpdate, once: mockOnce });
+  mockRef.mockReturnValue({ set: mockSet, update: mockUpdate, remove: mockRemove, once: mockOnce });
   mockOnce.mockResolvedValue({ val: () => ({}) });
+});
+
+// ---------------------------------------------------------------------------
+// PALETTE / BOARD_PALETTE_HEX
+// ---------------------------------------------------------------------------
+describe('PALETTE', () => {
+  it('has named entries that match BOARD_PALETTE_HEX positions', () => {
+    expect(PALETTE.yellow).toBe(BOARD_PALETTE_HEX[0]);
+    expect(PALETTE.green).toBe(BOARD_PALETTE_HEX[1]);
+    expect(PALETTE.blue).toBe(BOARD_PALETTE_HEX[2]);
+    expect(PALETTE.rose).toBe(BOARD_PALETTE_HEX[3]);
+    expect(PALETTE.lavender).toBe(BOARD_PALETTE_HEX[4]);
+    expect(PALETTE.mint).toBe(BOARD_PALETTE_HEX[5]);
+    expect(PALETTE.peach).toBe(BOARD_PALETTE_HEX[6]);
+    expect(PALETTE.grey).toBe(BOARD_PALETTE_HEX[7]);
+  });
+
+  it('BOARD_PALETTE_HEX contains exactly 8 colours', () => {
+    expect(BOARD_PALETTE_HEX).toHaveLength(8);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -51,26 +85,26 @@ beforeEach(() => {
 // ---------------------------------------------------------------------------
 describe('mapColorNameToHex', () => {
   it('maps known color names to board palette hex', () => {
-    expect(mapColorNameToHex('yellow')).toBe('#f5e6ab');
-    expect(mapColorNameToHex('pink')).toBe('#e8c5c5');
-    expect(mapColorNameToHex('blue')).toBe('#c5d5e8');
-    expect(mapColorNameToHex('green')).toBe('#d4e4bc');
-    expect(mapColorNameToHex('lavender')).toBe('#d4c5e8');
-    expect(mapColorNameToHex('purple')).toBe('#d4c5e8');
+    expect(mapColorNameToHex('yellow')).toBe(PALETTE.yellow);
+    expect(mapColorNameToHex('pink')).toBe(PALETTE.rose);
+    expect(mapColorNameToHex('blue')).toBe(PALETTE.blue);
+    expect(mapColorNameToHex('green')).toBe(PALETTE.green);
+    expect(mapColorNameToHex('lavender')).toBe(PALETTE.lavender);
+    expect(mapColorNameToHex('purple')).toBe(PALETTE.lavender);
   });
 
   it('passes board palette hex through unchanged', () => {
-    expect(mapColorNameToHex('#f5e6ab')).toBe('#f5e6ab');
-    expect(mapColorNameToHex('#d4e4bc')).toBe('#d4e4bc');
+    expect(mapColorNameToHex(PALETTE.yellow)).toBe(PALETTE.yellow);
+    expect(mapColorNameToHex(PALETTE.green)).toBe(PALETTE.green);
   });
 
   it('handles case-insensitive color names', () => {
-    expect(mapColorNameToHex('Yellow')).toBe('#f5e6ab');
-    expect(mapColorNameToHex('PINK')).toBe('#e8c5c5');
+    expect(mapColorNameToHex('Yellow')).toBe(PALETTE.yellow);
+    expect(mapColorNameToHex('PINK')).toBe(PALETTE.rose);
   });
 
   it('defaults unknown names to warm yellow', () => {
-    expect(mapColorNameToHex('chartreuse')).toBe('#f5e6ab');
+    expect(mapColorNameToHex('chartreuse')).toBe(PALETTE.yellow);
   });
 });
 
@@ -141,7 +175,7 @@ describe('createStickyNote', () => {
         y: 200,
         width: 160,
         height: 120,
-        color: '#f5e6ab',
+        color: PALETTE.yellow,
         createdBy: 'u1',
       })
     );
@@ -177,7 +211,7 @@ describe('createShape', () => {
 
   it('maps color names', async () => {
     await createShape('b1', 'rectangle', 0, 0, 100, 80, 'purple', 'u1');
-    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ color: '#d4c5e8' }));
+    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ color: PALETTE.lavender }));
   });
 });
 
@@ -195,6 +229,38 @@ describe('createFrame', () => {
         height: 220,
       })
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// createText
+// ---------------------------------------------------------------------------
+describe('createText', () => {
+  it('writes a text object to the correct path', async () => {
+    await createText('b1', 'My Heading', 100, 50, 240, 60, '#1a1a1a', 'u1');
+    expect(mockRef).toHaveBeenCalledWith('boards/b1/objects/test-id-1');
+  });
+
+  it('writes correct object shape', async () => {
+    await createText('b1', 'My Heading', 100, 50, 240, 60, '#1a1a1a', 'u1');
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'test-id-1',
+        type: 'text',
+        text: 'My Heading',
+        x: 100,
+        y: 50,
+        width: 240,
+        height: 60,
+        color: '#1a1a1a',
+        createdBy: 'u1',
+      })
+    );
+  });
+
+  it('returns the generated id', async () => {
+    const id = await createText('b1', 'Label', 0, 0, 200, 50, '#333', 'u1');
+    expect(id).toBe('test-id-1');
   });
 });
 
@@ -234,14 +300,14 @@ describe('createConnector', () => {
   it('uses custom color when provided', async () => {
     await createConnector('b1', 'f1', 't1', { color: 'pink' }, 'u1');
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ color: '#e8c5c5' })
+      expect.objectContaining({ color: PALETTE.rose })
     );
   });
 
-  it('defaults to cyan color', async () => {
+  it('defaults to blue (PALETTE.blue) color', async () => {
     await createConnector('b1', 'f1', 't1', {}, 'u1');
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ color: '#c5d5e8' })
+      expect.objectContaining({ color: PALETTE.blue })
     );
   });
 
@@ -320,11 +386,13 @@ describe('createMultiPointConnector', () => {
     );
   });
 
-  it('creates N-1 connections for N objects', async () => {
+  it('creates N-1 connections in a single batch write', async () => {
     await createMultiPointConnector('b1', ['a', 'b', 'c'], {}, 'u1');
-    // 3 objects → 2 connections (a→b and b→c)
-    // Each connection fetches objects once + writes once
-    expect(mockSet).toHaveBeenCalledTimes(2);
+    // Single update call with 2 connections (a→b and b→c)
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockSet).not.toHaveBeenCalled();
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(updateArg)).toHaveLength(2);
   });
 
   it('returns array of connection ids', async () => {
@@ -335,11 +403,12 @@ describe('createMultiPointConnector', () => {
 
   it('adds waypoint when curved option is true', async () => {
     await createMultiPointConnector('b1', ['a', 'b'], { curved: true }, 'u1');
-    const callArg = mockSet.mock.calls[0][0];
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const connData = Object.values(updateArg)[0] as Record<string, unknown>;
     // points should be present and non-empty flat array
-    expect(callArg.points).toBeDefined();
-    expect(Array.isArray(callArg.points)).toBe(true);
-    expect(callArg.points.length).toBeGreaterThan(0);
+    expect(connData.points).toBeDefined();
+    expect(Array.isArray(connData.points)).toBe(true);
+    expect((connData.points as unknown[]).length).toBeGreaterThan(0);
   });
 });
 
@@ -362,16 +431,21 @@ describe('connectInSequence', () => {
     await expect(connectInSequence('b1', ['a'], {}, 'u1')).rejects.toThrow('at least 2');
   });
 
-  it('creates N-1 forward connections', async () => {
+  it('creates N-1 forward connections in a single batch write', async () => {
     await connectInSequence('b1', ['a', 'b', 'c', 'd'], {}, 'u1');
-    // 4 objects → 3 connections
-    expect(mockSet).toHaveBeenCalledTimes(3);
+    // 4 objects → 3 connections in one batch write
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockSet).not.toHaveBeenCalled();
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(updateArg)).toHaveLength(3);
   });
 
-  it('creates 2*(N-1) connections when bidirectional', async () => {
+  it('creates 2*(N-1) connections when bidirectional in a single batch write', async () => {
     await connectInSequence('b1', ['a', 'b', 'c'], { direction: 'bidirectional' }, 'u1');
-    // 3 objects → 2 forward + 2 backward = 4 connections
-    expect(mockSet).toHaveBeenCalledTimes(4);
+    // 3 objects → 2 forward + 2 backward = 4 connections in one write
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(updateArg)).toHaveLength(4);
   });
 
   it('returns array of connection ids', async () => {
@@ -422,7 +496,7 @@ describe('createBatch', () => {
     expect(objData.y).toBe(60);
     expect(objData.width).toBe(160);
     expect(objData.height).toBe(120);
-    expect(objData.color).toBe('#d4e4bc');
+    expect(objData.color).toBe(PALETTE.green);
   });
 
   it('writes correct frame shape in batch', async () => {
@@ -435,6 +509,20 @@ describe('createBatch', () => {
     expect(objData.type).toBe('frame');
     expect(objData.text).toBe('My Frame');
     expect(objData.width).toBe(500);
+  });
+
+  it('writes correct text shape in batch', async () => {
+    await createBatch('b1', [
+      { tempId: 'tx1', action: 'createText' as const, params: { text: 'Heading', x: 100, y: 50, width: 240, height: 60, color: '#1a1a1a' } },
+    ], 'u1');
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const objData = Object.values(updateArg)[0] as Record<string, unknown>;
+    expect(objData.type).toBe('text');
+    expect(objData.text).toBe('Heading');
+    expect(objData.width).toBe(240);
+    expect(objData.height).toBe(60);
+    expect(objData.color).toBe('#1a1a1a');
   });
 
   it('populates cache with created objects', async () => {
@@ -565,12 +653,94 @@ describe('updateText', () => {
 describe('changeColor', () => {
   it('updates color (mapping name to hex)', async () => {
     await changeColor('b1', 'obj1', 'yellow');
-    expect(mockUpdate).toHaveBeenCalledWith({ color: '#f5e6ab' });
+    expect(mockUpdate).toHaveBeenCalledWith({ color: PALETTE.yellow });
   });
 
   it('defaults non-palette hex to warm yellow', async () => {
     await changeColor('b1', 'obj1', '#ABCDEF');
-    expect(mockUpdate).toHaveBeenCalledWith({ color: '#f5e6ab' });
+    expect(mockUpdate).toHaveBeenCalledWith({ color: PALETTE.yellow });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// addToFrame
+// ---------------------------------------------------------------------------
+describe('addToFrame', () => {
+  it('does nothing for empty objectIds', async () => {
+    await addToFrame('b1', [], 'frame1');
+    expect(mockUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sets frameId on all objects in a single multi-path write', async () => {
+    await addToFrame('b1', ['obj1', 'obj2', 'obj3'], 'frame1');
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    expect(updateArg['boards/b1/objects/obj1/frameId']).toBe('frame1');
+    expect(updateArg['boards/b1/objects/obj2/frameId']).toBe('frame1');
+    expect(updateArg['boards/b1/objects/obj3/frameId']).toBe('frame1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// setLayer
+// ---------------------------------------------------------------------------
+describe('setLayer', () => {
+  it('sets sentToBack=true to push object behind arrows', async () => {
+    await setLayer('b1', 'obj1', true);
+    expect(mockRef).toHaveBeenCalledWith('boards/b1/objects/obj1');
+    expect(mockUpdate).toHaveBeenCalledWith({ sentToBack: true });
+  });
+
+  it('sets sentToBack=false to bring object to front', async () => {
+    await setLayer('b1', 'obj1', false);
+    expect(mockUpdate).toHaveBeenCalledWith({ sentToBack: false });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// rotateObject
+// ---------------------------------------------------------------------------
+describe('rotateObject', () => {
+  it('sets rotation in degrees at the correct path', async () => {
+    await rotateObject('b1', 'obj1', 45);
+    expect(mockRef).toHaveBeenCalledWith('boards/b1/objects/obj1');
+    expect(mockUpdate).toHaveBeenCalledWith({ rotation: 45 });
+  });
+
+  it('sets rotation to 0', async () => {
+    await rotateObject('b1', 'obj1', 0);
+    expect(mockUpdate).toHaveBeenCalledWith({ rotation: 0 });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// writeAgentStatus / clearAgentStatus
+// ---------------------------------------------------------------------------
+describe('writeAgentStatus', () => {
+  it('writes status to the agentStatus path', async () => {
+    await writeAgentStatus('b1', { phase: 'thinking', iteration: 1, maxIterations: 3 });
+    expect(mockRef).toHaveBeenCalledWith('boards/b1/agentStatus');
+    expect(mockSet).toHaveBeenCalledWith({
+      phase: 'thinking',
+      iteration: 1,
+      maxIterations: 3,
+    });
+  });
+
+  it('writes calling_tools status with tool names', async () => {
+    await writeAgentStatus('b1', { phase: 'calling_tools', tools: ['createBatch', 'connectBatch'] });
+    expect(mockSet).toHaveBeenCalledWith({
+      phase: 'calling_tools',
+      tools: ['createBatch', 'connectBatch'],
+    });
+  });
+});
+
+describe('clearAgentStatus', () => {
+  it('removes the agentStatus node', async () => {
+    await clearAgentStatus('b1');
+    expect(mockRef).toHaveBeenCalledWith('boards/b1/agentStatus');
+    expect(mockRemove).toHaveBeenCalled();
   });
 });
 

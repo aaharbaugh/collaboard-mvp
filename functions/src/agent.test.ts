@@ -27,26 +27,22 @@ jest.mock('openai', () => ({
 }));
 
 // ---------------------------------------------------------------------------
-// LangFuse mock
+// LangSmith mock — tracing is fire-and-forget; errors are swallowed by agent
 // ---------------------------------------------------------------------------
-const mockGenerationEnd = jest.fn();
-const mockGenerationFn = jest.fn().mockReturnValue({ end: mockGenerationEnd });
-const mockSpanEnd = jest.fn();
-const mockSpan = jest.fn().mockReturnValue({ end: mockSpanEnd });
-const mockScore = jest.fn();
-const mockTraceUpdate = jest.fn();
-const mockTraceFn = jest.fn().mockReturnValue({
-  generation: mockGenerationFn,
-  update: mockTraceUpdate,
-  span: mockSpan,
-  score: mockScore,
-});
-const mockFlushAsync = jest.fn().mockResolvedValue(undefined);
-
-jest.mock('langfuse', () => ({
-  Langfuse: jest.fn().mockImplementation(() => ({
-    trace: mockTraceFn,
-    flushAsync: mockFlushAsync,
+jest.mock('langsmith', () => ({
+  Client: jest.fn().mockImplementation(() => ({
+    createFeedback: jest.fn().mockResolvedValue(undefined),
+  })),
+  RunTree: jest.fn().mockImplementation(() => ({
+    postRun: jest.fn().mockResolvedValue(undefined),
+    end: jest.fn().mockResolvedValue(undefined),
+    patchRun: jest.fn().mockResolvedValue(undefined),
+    createChild: jest.fn().mockReturnValue({
+      postRun: jest.fn().mockResolvedValue(undefined),
+      end: jest.fn().mockResolvedValue(undefined),
+      patchRun: jest.fn().mockResolvedValue(undefined),
+    }),
+    id: 'run-id-1',
   })),
 }));
 
@@ -57,6 +53,7 @@ jest.mock('./agentTools', () => ({
   createStickyNote: jest.fn().mockResolvedValue('sticky-id'),
   createShape: jest.fn().mockResolvedValue('shape-id'),
   createFrame: jest.fn().mockResolvedValue('frame-id'),
+  createText: jest.fn().mockResolvedValue('text-id'),
   createConnector: jest.fn().mockResolvedValue('conn-id'),
   createMultiPointConnector: jest.fn().mockResolvedValue(['conn-id']),
   connectInSequence: jest.fn().mockResolvedValue(['conn-id']),
@@ -66,6 +63,12 @@ jest.mock('./agentTools', () => ({
   resizeObject: jest.fn().mockResolvedValue(undefined),
   updateText: jest.fn().mockResolvedValue(undefined),
   changeColor: jest.fn().mockResolvedValue(undefined),
+  addToFrame: jest.fn().mockResolvedValue(undefined),
+  setLayer: jest.fn().mockResolvedValue(undefined),
+  rotateObject: jest.fn().mockResolvedValue(undefined),
+  deleteObjects: jest.fn().mockResolvedValue({ deleted: 1, connectionsRemoved: 0 }),
+  writeAgentStatus: jest.fn().mockResolvedValue(undefined),
+  clearAgentStatus: jest.fn().mockResolvedValue(undefined),
   getBoardState: jest.fn().mockResolvedValue({ objects: {}, connections: {} }),
   getBoardContext: jest.fn().mockResolvedValue({ objects: {}, connections: {} }),
   BOARD_PALETTE_HEX: ['#f5e6ab', '#d4e4bc', '#c5d5e8', '#e8c5c5', '#d4c5e8', '#c5e8d4', '#e8d4c5', '#e0e0d0'],
@@ -194,6 +197,73 @@ describe('runAgentCommand – tool execution', () => {
     );
   });
 
+  it('calls createText for text tool calls', async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        makeToolCallResponse([
+          { name: 'createText', args: { text: 'Heading', x: 100, y: 50, width: 240, height: 60, color: '#1a1a1a' } },
+        ])
+      )
+      .mockResolvedValueOnce(makeStopResponse());
+
+    await runAgentCommand(BASE_PARAMS);
+    expect(agentTools.createText).toHaveBeenCalledWith(
+      'board1', 'Heading', 100, 50, 240, 60, '#1a1a1a', 'user1'
+    );
+  });
+
+  it('calls addToFrame for addToFrame tool calls', async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        makeToolCallResponse([
+          { name: 'addToFrame', args: { objectIds: ['obj1', 'obj2'], frameId: 'frame1' } },
+        ])
+      )
+      .mockResolvedValueOnce(makeStopResponse());
+
+    await runAgentCommand(BASE_PARAMS);
+    expect(agentTools.addToFrame).toHaveBeenCalledWith('board1', ['obj1', 'obj2'], 'frame1');
+  });
+
+  it('calls setLayer for setLayer tool calls', async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        makeToolCallResponse([
+          { name: 'setLayer', args: { objectId: 'obj1', sentToBack: true } },
+        ])
+      )
+      .mockResolvedValueOnce(makeStopResponse());
+
+    await runAgentCommand(BASE_PARAMS);
+    expect(agentTools.setLayer).toHaveBeenCalledWith('board1', 'obj1', true);
+  });
+
+  it('calls rotateObject for rotateObject tool calls', async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        makeToolCallResponse([
+          { name: 'rotateObject', args: { objectId: 'obj1', rotation: 90 } },
+        ])
+      )
+      .mockResolvedValueOnce(makeStopResponse());
+
+    await runAgentCommand(BASE_PARAMS);
+    expect(agentTools.rotateObject).toHaveBeenCalledWith('board1', 'obj1', 90);
+  });
+
+  it('calls deleteObjects for deleteObjects tool calls', async () => {
+    mockCreate
+      .mockResolvedValueOnce(
+        makeToolCallResponse([
+          { name: 'deleteObjects', args: { objectIds: ['obj1', 'obj2'] } },
+        ])
+      )
+      .mockResolvedValueOnce(makeStopResponse());
+
+    await runAgentCommand(BASE_PARAMS);
+    expect(agentTools.deleteObjects).toHaveBeenCalledWith('board1', ['obj1', 'obj2']);
+  });
+
   it('calls createConnector for connector tool calls', async () => {
     mockCreate
       .mockResolvedValueOnce(
@@ -277,6 +347,18 @@ describe('runAgentCommand – agentic loop', () => {
     expect(mockCreate.mock.calls.length).toBeLessThanOrEqual(5);
     expect(result.success).toBe(true);
   });
+
+  it('writes agent status before each iteration and clears on finish', async () => {
+    mockCreate.mockResolvedValueOnce(makeStopResponse());
+
+    await runAgentCommand(BASE_PARAMS);
+
+    expect(agentTools.writeAgentStatus).toHaveBeenCalledWith(
+      'board1',
+      expect.objectContaining({ phase: 'thinking' })
+    );
+    expect(agentTools.clearAgentStatus).toHaveBeenCalledWith('board1');
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -301,30 +383,11 @@ describe('runAgentCommand – retry on error', () => {
     await expect(runAgentCommand(BASE_PARAMS)).rejects.toThrow('Service unavailable');
     expect(mockCreate).toHaveBeenCalledTimes(2);
   });
-});
 
-// ---------------------------------------------------------------------------
-// LangFuse observability
-// ---------------------------------------------------------------------------
-describe('runAgentCommand – LangFuse', () => {
-  it('creates a LangFuse trace for each command', async () => {
-    mockCreate.mockResolvedValueOnce(makeStopResponse());
-    await runAgentCommand(BASE_PARAMS);
-    expect(mockTraceFn).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 'user1' })
-    );
-  });
-
-  it('calls flushAsync after execution', async () => {
-    mockCreate.mockResolvedValueOnce(makeStopResponse());
-    await runAgentCommand(BASE_PARAMS);
-    expect(mockFlushAsync).toHaveBeenCalled();
-  });
-
-  it('flushes LangFuse even when an error is thrown', async () => {
+  it('clears agent status even when an error is thrown', async () => {
     const err = new Error('fail');
     mockCreate.mockRejectedValue(err);
     await expect(runAgentCommand(BASE_PARAMS)).rejects.toThrow('fail');
-    expect(mockFlushAsync).toHaveBeenCalled();
+    expect(agentTools.clearAgentStatus).toHaveBeenCalledWith('board1');
   });
 });

@@ -8,7 +8,6 @@ const TOOLS: { mode: ToolMode; label: string; hotkey: string }[] = [
 ];
 
 const SHAPE_LABELS: Record<string, string> = { star: 'Star', circle: 'Circle', rectangle: 'Rect' };
-const POINTER_LABELS: Record<string, string> = { select: 'Select', move: 'Move' };
 
 const SHAPE_PREVIEW_SIZE = 20;
 const SHAPE_STROKE = 1.25;
@@ -16,15 +15,15 @@ const SHAPE_STROKE = 1.25;
 /** 5-point star matching board Star (innerRadius = 0.4 * outerRadius), viewBox 0 0 24 24, center 12,12 */
 const STAR_PATH = 'M12 2 L14.35 8.76 L21.5 8.91 L15.8 13.24 L17.88 20.09 L12 16 L6.12 20.09 L8.2 13.24 L2.5 8.91 L9.65 8.76 Z';
 
-function ShapePreviewIcons({ activeShape }: { activeShape: ToolMode }) {
+function ShapePreviewIcons({ activeShape, isActive }: { activeShape: ToolMode; isActive: boolean }) {
   const green = 'var(--accent-green)';
-  const stroke = 'var(--text-primary)';
-  const isStar = activeShape === 'star';
-  const isCircle = activeShape === 'circle';
-  const isRect = activeShape === 'rectangle';
+  const stroke = isActive ? 'var(--text-primary)' : 'var(--text-muted)';
+  const isStar = isActive && activeShape === 'star';
+  const isCircle = isActive && activeShape === 'circle';
+  const isRect = isActive && activeShape === 'rectangle';
 
   return (
-    <div className="toolbar-shape-preview" aria-hidden>
+    <div className={`toolbar-shape-preview${isActive ? '' : ' toolbar-shape-preview--dim'}`} aria-hidden>
       <svg width={SHAPE_PREVIEW_SIZE} height={SHAPE_PREVIEW_SIZE} viewBox="0 0 24 24" fill="none" stroke={isStar ? green : stroke} strokeWidth={SHAPE_STROKE}>
         {isStar ? <path fill={green} stroke={green} d={STAR_PATH} /> : <path d={STAR_PATH} />}
       </svg>
@@ -57,13 +56,13 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
       if (e.repeat) return;
 
       let digit: string | null = null;
-      if (e.key >= '1' && e.key <= '5') digit = e.key;
+      if (e.key >= '1' && e.key <= '6') digit = e.key;
       else if (e.code?.startsWith('Digit') && e.code.length === 6) {
         const n = e.code.slice(5);
-        if (n >= '1' && n <= '5') digit = n;
+        if (n >= '1' && n <= '6') digit = n;
       } else if (e.code?.startsWith('Numpad') && e.code.length === 7) {
         const n = e.code.slice(6);
-        if (n >= '1' && n <= '5') digit = n;
+        if (n >= '1' && n <= '6') digit = n;
       }
 
       if (digit) {
@@ -89,7 +88,6 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [setToolMode, cycleShapeTool, cyclePointerTool, onHotkeyPress, onAiToggle]);
 
-  const pointerLabel = POINTER_CYCLE.includes(toolMode) ? POINTER_LABELS[toolMode] : POINTER_LABELS[POINTER_CYCLE[0]];
   const isPointerActive = POINTER_CYCLE.includes(toolMode);
 
   const shapeLabel = SHAPE_CYCLE.includes(toolMode) ? SHAPE_LABELS[toolMode] : SHAPE_LABELS[SHAPE_CYCLE[0]];
@@ -103,7 +101,10 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
         className={`toolbar-btn ${isPointerActive ? 'active' : ''}`}
         onClick={() => cyclePointerTool()}
       >
-        <span className="hotkey">[1]</span> {pointerLabel}
+        <span className="hotkey">[1]</span>{' '}
+        <span className={isPointerActive && toolMode === 'move' ? 'cycle-dim' : ''}>Select</span>
+        <span className="cycle-slash">/</span>
+        <span className={isPointerActive && toolMode === 'select' ? 'cycle-dim' : ''}>Move</span>
       </button>
       {TOOLS.slice(0, 1).map(({ mode, label, hotkey }) => (
         <button
@@ -115,7 +116,7 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
         </button>
       ))}
       <div className="toolbar-shape-group">
-        {isShapeActive && <ShapePreviewIcons activeShape={currentShape} />}
+        <ShapePreviewIcons activeShape={currentShape} isActive={isShapeActive} />
         <button
           key="shape"
           className={`toolbar-btn ${isShapeActive ? 'active' : ''}`}

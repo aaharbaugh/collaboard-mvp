@@ -247,20 +247,28 @@ export function BoardView() {
               </div>
             </div>
           )}
-          <Toolbar
-            onHotkeyPress={clearSelectionOnHotkey}
-            onAiToggle={() => setIsAiOpen((v) => !v)}
-            isAiOpen={isAiOpen}
-          />
+          <div className="toolbar-area">
+            {isAiOpen && (
+              <AgentPanel
+                boardId={boardId}
+                isOpen={isAiOpen}
+                onClose={() => setIsAiOpen(false)}
+                selectedIds={selectedIds}
+                viewport={{
+                  ...viewport,
+                  width: wrapperRef.current?.offsetWidth,
+                  height: wrapperRef.current?.offsetHeight,
+                }}
+              />
+            )}
+            <Toolbar
+              onHotkeyPress={clearSelectionOnHotkey}
+              onAiToggle={() => setIsAiOpen((v) => !v)}
+              isAiOpen={isAiOpen}
+            />
+          </div>
         </div>
       </div>
-      <AgentPanel
-            boardId={boardId}
-            isOpen={isAiOpen}
-            onClose={() => setIsAiOpen(false)}
-            selectedIds={selectedIds}
-            viewport={viewport}
-          />
     </div>
   );
 }

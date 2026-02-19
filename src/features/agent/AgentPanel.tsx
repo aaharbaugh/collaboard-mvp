@@ -1,12 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
-import { useAgentCommand } from './useAgentCommand';
+import { useAgentCommand, getStatusMessage } from './useAgentCommand';
 
 interface AgentPanelProps {
   boardId: string;
   isOpen: boolean;
   onClose: () => void;
   selectedIds?: string[];
-  viewport?: { x: number; y: number; scale: number };
+  viewport?: { x: number; y: number; scale: number; width?: number; height?: number };
 }
 
 const EXAMPLE_COMMANDS = [
@@ -18,8 +18,9 @@ const EXAMPLE_COMMANDS = [
 
 export function AgentPanel({ boardId, isOpen, onClose, selectedIds, viewport }: AgentPanelProps) {
   const [command, setCommand] = useState('');
-  const { runCommand, loading, error } = useAgentCommand(boardId);
+  const { runCommand, loading, error, agentStatus } = useAgentCommand(boardId);
   const inputRef = useRef<HTMLInputElement>(null);
+  const popupRef = useRef<HTMLDivElement>(null);
 
   // Focus the input when the panel opens
   useEffect(() => {
@@ -30,15 +31,25 @@ export function AgentPanel({ boardId, isOpen, onClose, selectedIds, viewport }: 
 
   // Close on Escape
   useEffect(() => {
-    if (!isOpen) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isOpen, onClose]);
+  }, [onClose]);
 
-  if (!isOpen) return null;
+  // Auto-hide when clicking outside — but ignore clicks within the toolbar-area
+  // so the [6] toggle button can manage its own open/close state.
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      const target = e.target as Node;
+      const toolbarArea = popupRef.current?.closest('.toolbar-area');
+      if (toolbarArea?.contains(target)) return;
+      if (!popupRef.current?.contains(target)) onClose();
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [onClose]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,73 +62,72 @@ export function AgentPanel({ boardId, isOpen, onClose, selectedIds, viewport }: 
     }
   };
 
+  const statusMessage = getStatusMessage(agentStatus);
+
   return (
-    <>
-      <div
-        className="agent-backdrop"
+    <div
+      ref={popupRef}
+      className="agent-popup"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Ask AI"
+    >
+      <button
+        type="button"
+        className="agent-close-btn"
         onClick={onClose}
-        aria-hidden="true"
-      />
-      <div
-        className="agent-popup"
-        role="dialog"
-        aria-modal="true"
-        aria-label="Ask AI"
+        aria-label="Close"
       >
-        <div className="agent-popup-header">
-          <span className="agent-popup-title">Ask AI</span>
-          <button
-            type="button"
-            className="agent-close-btn"
-            onClick={onClose}
-            aria-label="Close"
-          >
-            ✕
-          </button>
+        ✕
+      </button>
+      <form className="agent-form" onSubmit={handleSubmit}>
+        <input
+          ref={inputRef}
+          className="agent-input"
+          value={command}
+          onChange={(e) => setCommand(e.target.value)}
+          placeholder="Describe what to create or change..."
+          disabled={loading}
+          aria-label="AI command"
+        />
+        <button
+          type="submit"
+          className="agent-send-btn"
+          disabled={loading || !command.trim()}
+        >
+          {loading ? '...' : 'Ask'}
+        </button>
+      </form>
+
+      {loading && (
+        <div className="agent-status-bar">
+          <span className="agent-spinner" />
+          <span className="agent-status-text">{statusMessage}</span>
         </div>
+      )}
 
-        <form className="agent-form" onSubmit={handleSubmit}>
-          <input
-            ref={inputRef}
-            className="agent-input"
-            value={command}
-            onChange={(e) => setCommand(e.target.value)}
-            placeholder="Describe what to create or change..."
-            disabled={loading}
-            aria-label="AI command"
-          />
-          <button
-            type="submit"
-            className="agent-send-btn"
-            disabled={loading || !command.trim()}
-          >
-            {loading ? 'Working...' : 'Ask'}
-          </button>
-        </form>
+      {error && (
+        <div className="agent-error" role="alert">
+          {error}
+        </div>
+      )}
 
-        {error && (
-          <div className="agent-error" role="alert">
-            {error}
-          </div>
-        )}
-
-        <div>
-          <div className="agent-examples-label">Examples</div>
-          <div className="agent-examples">
-            {EXAMPLE_COMMANDS.map((cmd) => (
-              <button
-                key={cmd}
-                type="button"
-                className="agent-example-btn"
-                disabled={loading}
-                onClick={() => { if (!loading) setCommand(cmd); }}
-              >
-                {cmd}
-              </button>
-            ))}
-          </div>
+      <div>
+        <div className="agent-examples-label">Examples</div>
+        <div className="agent-examples">
+          {EXAMPLE_COMMANDS.map((cmd) => (
+            <button
+              key={cmd}
+              type="button"
+              className="agent-example-btn"
+              disabled={loading}
+              onClick={() => { if (!loading) setCommand(cmd); }}
+            >
+              {cmd}
+            </button>
+          ))}
         </div>
       </div>
-    </>
+    </div>
   );
 }

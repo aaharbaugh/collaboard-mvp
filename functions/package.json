@@ -16,9 +16,10 @@
   },
   "main": "lib/index.js",
   "dependencies": {
+    "@opentelemetry/api": "^1.9.0",
     "firebase-admin": "^13.6.0",
     "firebase-functions": "^7.0.0",
-    "langfuse": "^3.0.0",
+    "langsmith": "^0.5.4",
     "openai": "^4.0.0"
   },
   "devDependencies": {

@@ -1,18 +1,57 @@
 import { useState } from 'react';
-import { auth } from '../../lib/firebase';
+import { ref, onValue, off } from 'firebase/database';
+import { auth, database } from '../../lib/firebase';
 
 export interface AgentCommandContext {
   selectedIds?: string[];
-  viewport?: { x: number; y: number; scale: number };
+  /** width/height are the actual canvas pixel dimensions so the agent places objects accurately. */
+  viewport?: { x: number; y: number; scale: number; width?: number; height?: number };
+}
+
+export interface AgentStatus {
+  phase: 'thinking' | 'calling_tools';
+  iteration?: number;
+  maxIterations?: number;
+  tools?: string[];
+}
+
+export function getStatusMessage(status: AgentStatus | null): string {
+  if (!status) return 'Working...';
+  if (status.phase === 'thinking') {
+    if (!status.iteration || status.iteration <= 1) return 'Planning layout...';
+    return `Refining (step ${status.iteration})...`;
+  }
+  if (status.phase === 'calling_tools' && status.tools?.length) {
+    const tools = status.tools;
+    if (tools.some((t) => t === 'createBatch' || t === 'createStickyNote' || t === 'createShape' || t === 'createFrame' || t === 'createText')) {
+      return 'Creating objects...';
+    }
+    if (tools.some((t) => t === 'connectBatch' || t === 'connectInSequence' || t === 'createConnector' || t === 'createMultiPointConnector')) {
+      return 'Connecting elements...';
+    }
+    if (tools.some((t) => t === 'addToFrame')) return 'Grouping into frames...';
+    if (tools.some((t) => t === 'deleteObjects')) return 'Removing objects...';
+    if (tools.some((t) => t === 'setLayer')) return 'Adjusting layers...';
+  }
+  return 'Working...';
 }
 
 export function useAgentCommand(boardId: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
 
   const runCommand = async (command: string, context?: AgentCommandContext): Promise<unknown> => {
     setLoading(true);
     setError(null);
+    setAgentStatus(null);
+
+    // Start listening to live agent status from Firebase
+    const statusRef = ref(database, `boards/${boardId}/agentStatus`);
+    const unsubscribe = onValue(statusRef, (snap) => {
+      setAgentStatus(snap.val() as AgentStatus | null);
+    });
+
     try {
       const token = await auth.currentUser?.getIdToken() ?? '';
       const body: Record<string, unknown> = {
@@ -43,8 +82,12 @@ export function useAgentCommand(boardId: string) {
       setError(message);
       setLoading(false);
       throw err;
+    } finally {
+      off(statusRef);
+      unsubscribe();
+      setAgentStatus(null);
     }
   };
 
-  return { runCommand, loading, error };
+  return { runCommand, loading, error, agentStatus };
 }

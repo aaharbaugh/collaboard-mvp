@@ -1,6 +1,6 @@
 import * as admin from 'firebase-admin';
 import OpenAI from 'openai';
-import { Langfuse } from 'langfuse';
+import { Client, RunTree } from 'langsmith';
 import * as agentTools from './agentTools.js';
 
 // Initialize Admin SDK once per cold start
@@ -10,22 +10,24 @@ if (!admin.apps.length) {
 
 // Lazily initialized to avoid crashing during Firebase deploy analysis (env vars not set at load time)
 let _openai: OpenAI | null = null;
-let _langfuse: Langfuse | null = null;
+let _langsmith: Client | null = null;
 
 function getOpenAI(): OpenAI {
   if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return _openai;
 }
 
-function getLangfuse(): Langfuse {
-  if (!_langfuse) {
-    _langfuse = new Langfuse({
-      publicKey: process.env.LANGFUSE_PUBLIC_KEY ?? '',
-      secretKey: process.env.LANGFUSE_SECRET_KEY ?? '',
-      baseUrl: process.env.LANGFUSE_HOST,
-    });
-  }
-  return _langfuse;
+/** Returns null if LANGSMITH_API_KEY is missing or a placeholder — tracing is optional. */
+function getLangsmith(): Client | null {
+  const key = process.env.LANGSMITH_API_KEY;
+  if (!key || key.startsWith('your-')) return null;
+  if (!_langsmith) _langsmith = new Client({ apiKey: key });
+  return _langsmith;
+}
+
+/** Fire-and-forget wrapper: tracing errors are swallowed so they can never crash the agent. */
+function withTrace(fn: () => Promise<unknown>): Promise<void> {
+  return fn().then(() => undefined).catch(() => undefined);
 }
 
 // ---------------------------------------------------------------------------
@@ -39,8 +41,9 @@ export interface AgentCommandRequest {
   userName: string;
   /** When set, only these objects (and their connections) are sent as context. */
   selectedIds?: string[];
-  /** When set (and no selection), only objects in visible viewport are sent. */
-  viewport?: { x: number; y: number; scale: number };
+  /** When set (and no selection), only objects in visible viewport are sent.
+   *  width/height are the actual canvas pixel dimensions for accurate placement guidance. */
+  viewport?: { x: number; y: number; scale: number; width?: number; height?: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -128,28 +131,30 @@ export async function runAgentCommand(
   const maxIterations = estimateRequiredIterations(command);
   const estimatedPattern = detectPattern(command);
 
-  // LangFuse observability
-  const trace = getLangfuse().trace({
-    name: 'agent-command',
-    userId,
-    metadata: { boardId, userName },
-  });
-  trace.update({
-    input: {
-      boardId,
-      command,
-      userId,
-      userName,
-      ...(selectedIds?.length && { selectedIds }),
-      ...(viewport && { viewport }),
-    },
-    metadata: {
-      estimatedPattern,
-      objectCount: Object.keys(boardState.objects).length,
-      connectionCount: Object.keys(boardState.connections).length,
-      maxIterations,
-    },
-  });
+  // LangSmith observability — optional (no-op if LANGSMITH_API_KEY is not set)
+  const langsmith = getLangsmith();
+  let rootRun: RunTree | null = null;
+  if (langsmith) {
+    rootRun = new RunTree({
+      name: 'agent-command',
+      run_type: 'chain',
+      inputs: {
+        boardId, command, userId, userName,
+        ...(selectedIds?.length && { selectedIds }),
+        ...(viewport && { viewport }),
+      },
+      client: langsmith,
+      project_name: process.env.LANGSMITH_PROJECT ?? 'collabboard',
+      metadata: {
+        estimatedPattern,
+        objectCount: Object.keys(boardState.objects).length,
+        connectionCount: Object.keys(boardState.connections).length,
+        maxIterations,
+      },
+      tags: [estimatedPattern],
+    });
+    await withTrace(() => rootRun!.postRun());
+  }
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
     { role: 'system', content: buildSystemPrompt(boardState, { viewport: viewport ?? undefined, selectedIds: selectedIds?.length ? selectedIds : undefined }) },
@@ -163,11 +168,16 @@ export async function runAgentCommand(
     for (let iter = 0; iter < maxIterations; iter++) {
       iterationsUsed = iter + 1;
 
-      const generation = trace.generation({
+      await agentTools.writeAgentStatus(boardId, { phase: 'thinking', iteration: iter + 1, maxIterations });
+
+      // LangSmith: child run for this LLM iteration
+      const llmRun = rootRun?.createChild({
         name: `openai-iter-${iter}`,
-        model: 'gpt-4o-mini',
-        input: { messages },
-      });
+        run_type: 'llm',
+        inputs: { messages },
+        extra: { invocation_params: { model: 'gpt-4o-mini' } },
+      }) ?? null;
+      if (llmRun) await withTrace(() => llmRun!.postRun());
 
       let response: OpenAI.ChatCompletion;
       try {
@@ -180,18 +190,23 @@ export async function runAgentCommand(
           })
         );
       } catch (err: unknown) {
-        generation.end({ output: { error: String(err) } });
+        if (llmRun) await withTrace(async () => { await llmRun!.end(undefined, String(err)); await llmRun!.patchRun(); });
         throw err;
       }
 
-      generation.end({
-        output: response.choices[0].message,
-        usage: {
-          promptTokens: response.usage?.prompt_tokens ?? 0,
-          completionTokens: response.usage?.completion_tokens ?? 0,
-          totalTokens: response.usage?.total_tokens ?? 0,
-        },
-      });
+      if (llmRun) {
+        await withTrace(async () => {
+          await llmRun!.end({
+            output: response.choices[0].message,
+            usage: {
+              prompt_tokens: response.usage?.prompt_tokens ?? 0,
+              completion_tokens: response.usage?.completion_tokens ?? 0,
+              total_tokens: response.usage?.total_tokens ?? 0,
+            },
+          });
+          await llmRun!.patchRun();
+        });
+      }
 
       const choice = response.choices[0];
       messages.push(choice.message as OpenAI.ChatCompletionMessageParam);
@@ -201,19 +216,34 @@ export async function runAgentCommand(
       const toolCalls = choice.message.tool_calls ?? [];
       totalToolCalls += toolCalls.length;
 
+      await agentTools.writeAgentStatus(boardId, {
+        phase: 'calling_tools',
+        tools: toolCalls.map((t) => t.function.name),
+      });
+
       // Dispatch all tool calls in parallel
       const toolResults = await Promise.all(
         toolCalls.map(async (tc) => {
           const args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
           const spanStart = Date.now();
-          const span = trace.span?.({ name: `tool:${tc.function.name}` });
+          const toolRun = rootRun?.createChild({
+            name: `tool:${tc.function.name}`,
+            run_type: 'tool',
+            inputs: args,
+          }) ?? null;
+          if (toolRun) await withTrace(() => toolRun!.postRun());
           let result: unknown;
           try {
             result = await dispatchTool(tc.function.name, args, boardId, userId, objectCache);
           } catch (err: unknown) {
             result = { error: String(err) };
           }
-          span?.end({ output: result, metadata: { durationMs: Date.now() - spanStart } });
+          if (toolRun) {
+            await withTrace(async () => {
+              await toolRun!.end({ result, durationMs: Date.now() - spanStart });
+              await toolRun!.patchRun();
+            });
+          }
           return {
             role: 'tool' as const,
             tool_call_id: tc.id,
@@ -225,21 +255,35 @@ export async function runAgentCommand(
       messages.push(...toolResults);
     }
 
-    // Log quality scores
+    // Log quality scores as LangSmith feedback
     const overlapCount = checkOverlaps(objectCache);
-    trace.score?.({ name: 'overlap_count', value: overlapCount });
-    trace.score?.({ name: 'iterations_used', value: iterationsUsed });
-    trace.score?.({ name: 'tool_calls_total', value: totalToolCalls });
+    if (rootRun && langsmith) {
+      await withTrace(() => Promise.all([
+        langsmith!.createFeedback(rootRun!.id, 'overlap_count', { score: overlapCount }),
+        langsmith!.createFeedback(rootRun!.id, 'iterations_used', { score: iterationsUsed }),
+        langsmith!.createFeedback(rootRun!.id, 'tool_calls_total', { score: totalToolCalls }),
+      ]));
+    }
 
     const result = { success: true, message: `Executed ${totalToolCalls} operations` };
-    trace.update({ output: { success: true, message: result.message, totalToolCalls } });
+    if (rootRun) {
+      await withTrace(async () => {
+        await rootRun!.end({ success: true, message: result.message, totalToolCalls });
+        await rootRun!.patchRun();
+      });
+    }
     return result;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    trace.update({ output: { success: false, error: message } });
+    if (rootRun) {
+      await withTrace(async () => {
+        await rootRun!.end(undefined, message);
+        await rootRun!.patchRun();
+      });
+    }
     throw err;
   } finally {
-    await getLangfuse().flushAsync();
+    await agentTools.clearAgentStatus(boardId);
   }
 }
 
@@ -291,6 +335,35 @@ async function dispatchTool(
       cache.set(id, { x, y, width: w, height: h });
       return id;
     }
+    case 'createText': {
+      const x = args['x'] as number;
+      const y = args['y'] as number;
+      const w = (args['width'] as number) ?? 240;
+      const h = (args['height'] as number) ?? 60;
+      const id = await agentTools.createText(
+        boardId, args['text'] as string, x, y, w, h, (args['color'] as string) ?? '#1a1a1a', userId
+      );
+      cache.set(id, { x, y, width: w, height: h });
+      return id;
+    }
+    case 'addToFrame':
+      return agentTools.addToFrame(
+        boardId,
+        args['objectIds'] as string[],
+        args['frameId'] as string
+      );
+    case 'setLayer':
+      return agentTools.setLayer(
+        boardId,
+        args['objectId'] as string,
+        args['sentToBack'] as boolean
+      );
+    case 'rotateObject':
+      return agentTools.rotateObject(
+        boardId,
+        args['objectId'] as string,
+        args['rotation'] as number
+      );
     case 'createBatch':
       return agentTools.createBatch(
         boardId,
@@ -423,7 +496,7 @@ function buildSpatialBoardStateText(
 
 function buildSystemPrompt(
   boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> },
-  options?: { viewport?: { x: number; y: number; scale: number }; selectedIds?: string[] }
+  options?: { viewport?: { x: number; y: number; scale: number; width?: number; height?: number }; selectedIds?: string[] }
 ): string {
   const stateBlock = buildSpatialBoardStateText(boardState);
   const objCount = Object.keys(boardState.objects).length;
@@ -433,8 +506,9 @@ function buildSystemPrompt(
   let viewportSection = '';
   if (options?.viewport) {
     const { x, y, scale } = options.viewport;
-    const CANVAS_W = 1200;
-    const CANVAS_H = 800;
+    // Use actual canvas dimensions when available; fall back to common defaults
+    const CANVAS_W = options.viewport.width ?? 1200;
+    const CANVAS_H = options.viewport.height ?? 800;
     const left = Math.round(-x / scale);
     const top = Math.round(-y / scale);
     const right = Math.round(left + CANVAS_W / scale);
@@ -444,6 +518,7 @@ function buildSystemPrompt(
     viewportSection = `
 === CURRENT VIEW ===
 Viewport center: (${cx}, ${cy}) | Visible area: x ${left}–${right}, y ${top}–${bottom}
+Canvas pixel size: ${CANVAS_W}×${CANVAS_H} at scale ${scale.toFixed(2)}
 Place ALL new objects inside the visible area unless the user specifies coordinates.
 Default anchor for new content: (${Math.round(cx - 80)}, ${Math.round(cy - 60)}).`;
   }
@@ -465,10 +540,26 @@ ${stateBlock}
 (${objCount} objects, ${connCount} connections)
 ${viewportSection}${selectionSection}
 
+=== ALL PRIMITIVE TYPES ===
+stickyNote   - 160×120 colored card with text. Best for content/ideas.
+text         - Transparent heading/label (no background). Sizes: H1=240×60, H2=200×50, H3=180×44.
+               color = text color (dark #1a1a1a). Great for titles and section labels.
+rectangle    - Geometric box. Use for flowchart steps, diagram nodes.
+circle       - Geometric oval. Use for bubbles, process endpoints.
+star         - 5-point star.
+frame        - Labeled container. Create frame first, then addToFrame for children.
+               Children move/resize with the frame automatically.
+
 === COORDINATE SYSTEM ===
 Origin: top-left. X increases right, Y increases down. Units: pixels.
-Canvas: (0,0)–(2000,2000). Sticky: 160x120. Shape default: 150x100.
+Canvas: (0,0)–(2000,2000). Sticky: 160×120. Shape default: 150×100. Text H1: 240×60.
 Minimum gap between objects: 60 px on all sides.
+
+=== LAYER SYSTEM ===
+By default objects sit above connection arrows.
+- setLayer(objectId, sentToBack=true): put object behind arrows (use for background shapes).
+- addToFrame(objectIds, frameId): group objects as frame children.
+Tip: Create a large colored rectangle, sentToBack=true, as a background section divider.
 
 === SPATIAL PLANNING — compute ALL coordinates before any tool calls ===
 1. Identify layout pattern: grid, flowchart, tree, cluster, kanban, comparison.
@@ -494,6 +585,12 @@ Mind map — center (cx, cy); branches at radius 300, angles 0,60,120,180,240,30
 Kanban (3 cols) — frames at (cx-450,cy-220),(cx-100,cy-220),(cx+250,cy-220) each 300x500.
 Comparison (2 cols) — headers at (cx-200, cy-200) and (cx+100, cy-200); items spaced 170 below.
 
+Timeline — large frame, text headings for date labels, sticky notes for events, connectInSequence.
+Architecture diagram — rectangles for services → connectBatch with labels → frame for grouping layers.
+Infographic/Poster — createText H1 title at top → large frame container → shapes as decorative elements.
+Background sections — createShape(rectangle, large, color=mint, sentToBack=true) → sticky notes on top.
+Roadmap (Kanban) — 3 frames (Now/Soon/Later) → addToFrame items into each column → text headings above.
+
 === LINE DRAWINGS & FREE-FORM PATHS ===
 To draw shapes, illustrations, or strokes (faces, arrows, decorative art):
 - Use createConnector with options.points containing 20-100 waypoints
@@ -512,23 +609,26 @@ Example — a face outline (~36 pts), left eye (~12 pts), right eye (~12 pts), m
   4 separate createConnector calls, each with its own detailed points array
 
 === COLORS ===
-Use ONLY these hex values: ${agentTools.BOARD_PALETTE_HEX.join(' ')}
+Use ONLY these hex values for stickyNote/shape/frame backgrounds: ${agentTools.BOARD_PALETTE_HEX.join(' ')}
 Semantic: #d4e4bc=green(positive/strengths), #e8c5c5=rose(negative/weaknesses),
           #c5d5e8=blue(neutral), #f5e6ab=yellow(highlight/opportunities),
           #e8d4c5=peach(warning/threats), #d4c5e8=lavender, #c5e8d4=mint, #e0e0d0=grey.
+For text type: color is the text color, use #1a1a1a (dark) or any readable dark color.
 
 === WORKFLOW ===
 1. PLAN: pick layout, compute all (x,y) coordinates, choose colors.
 2. CREATE: use createBatch for multiple objects (returns [{tempId, actualId}]).
 3. CONNECT: use connectBatch for multiple connections, connectInSequence for chains.
-4. ADJUST: moveObject or resizeObject only if needed.
-5. FINISH: one short confirmation message (no tool calls).
+4. LAYER/GROUP: use setLayer for background shapes, addToFrame to group into frames.
+5. ADJUST: moveObject or resizeObject only if needed.
+6. FINISH: one short confirmation message (no tool calls).
 
 === CRITICAL RULES ===
 - DEFAULT OBJECT TYPE: use createStickyNote (not createShape) for any text-based content.
+  Use createText for headings, labels, titles (no background needed).
   Only use createShape for geometric/diagram shapes (boxes in flowcharts, circles, etc.).
 - FRAMES: only create a frame when the user explicitly asks for a container or frame.
-  Never auto-wrap content in frames.
+  Never auto-wrap content in frames unless asked.
 - PLACEMENT: always place new objects within the visible viewport area shown above.
 - DELETE: use deleteObjects with the object IDs to remove things. When user says "delete
   the selection" or "remove these", use the Selected Objects IDs listed above.
@@ -559,10 +659,10 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
                 type: 'object',
                 properties: {
                   tempId: { type: 'string', description: 'Your reference label (e.g. "s1", "frame1")' },
-                  action: { type: 'string', enum: ['createStickyNote', 'createShape', 'createFrame'] },
+                  action: { type: 'string', enum: ['createStickyNote', 'createShape', 'createFrame', 'createText'] },
                   params: {
                     type: 'object',
-                    description: 'createStickyNote: {text,x,y,color}. createShape: {type,x,y,width,height,color}. createFrame: {title,x,y,width,height}.',
+                    description: 'createStickyNote: {text,x,y,color}. createShape: {type,x,y,width,height,color}. createFrame: {title,x,y,width,height}. createText: {text,x,y,width?,height?,color?} (color=text color, default #1a1a1a).',
                   },
                 },
                 required: ['tempId', 'action', 'params'],
@@ -820,6 +920,70 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
             color: { type: 'string' },
           },
           required: ['objectId', 'color'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'createText',
+        description: 'Create a transparent text label/heading (no background). Great for titles, section labels, date stamps. H1=240×60, H2=200×50, H3=180×44. Returns its ID.',
+        parameters: {
+          type: 'object',
+          properties: {
+            text: { type: 'string' },
+            x: { type: 'number' },
+            y: { type: 'number' },
+            width: { type: 'number', description: 'Default 240' },
+            height: { type: 'number', description: 'Default 60' },
+            color: { type: 'string', description: 'Text color (dark). Default #1a1a1a' },
+          },
+          required: ['text', 'x', 'y'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'addToFrame',
+        description: 'Group objects into a frame as children. Children move with the frame. Call after creating the frame and the objects.',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectIds: { type: 'array', items: { type: 'string' }, description: 'IDs of objects to add to the frame' },
+            frameId: { type: 'string', description: 'ID of the target frame' },
+          },
+          required: ['objectIds', 'frameId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'setLayer',
+        description: 'Control object depth. sentToBack=true puts object behind arrows/connections (good for background shapes). sentToBack=false brings it to front.',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectId: { type: 'string' },
+            sentToBack: { type: 'boolean', description: 'true = behind connections, false = in front' },
+          },
+          required: ['objectId', 'sentToBack'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'rotateObject',
+        description: 'Rotate an object by setting its rotation in degrees (0–360).',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectId: { type: 'string' },
+            rotation: { type: 'number', description: 'Rotation in degrees' },
+          },
+          required: ['objectId', 'rotation'],
         },
       },
     },

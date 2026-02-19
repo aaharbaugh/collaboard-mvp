@@ -40,7 +40,7 @@ export type ObjectCache = Map<string, BoardObjectLite>;
 
 export interface BatchCreateOp {
   tempId: string;
-  action: 'createStickyNote' | 'createShape' | 'createFrame';
+  action: 'createStickyNote' | 'createShape' | 'createFrame' | 'createText';
   params: Record<string, unknown>;
 }
 
@@ -65,6 +65,18 @@ export const BOARD_PALETTE_HEX = [
   '#e8d4c5', // peach
   '#e0e0d0', // light grey
 ] as const;
+
+/** Named aliases for the board palette — use these instead of raw hex strings. */
+export const PALETTE = {
+  yellow:   BOARD_PALETTE_HEX[0], // '#f5e6ab'
+  green:    BOARD_PALETTE_HEX[1], // '#d4e4bc' (sage)
+  blue:     BOARD_PALETTE_HEX[2], // '#c5d5e8' (default for connections)
+  rose:     BOARD_PALETTE_HEX[3], // '#e8c5c5' (dusty rose / negative)
+  lavender: BOARD_PALETTE_HEX[4], // '#d4c5e8'
+  mint:     BOARD_PALETTE_HEX[5], // '#c5e8d4'
+  peach:    BOARD_PALETTE_HEX[6], // '#e8d4c5' (warning)
+  grey:     BOARD_PALETTE_HEX[7], // '#e0e0d0'
+} as const;
 
 const COLOR_MAP: Record<string, string> = {
   yellow: '#f5e6ab',
@@ -159,18 +171,17 @@ function flattenWaypoints(options: ConnectorOptions): number[] | undefined {
 }
 
 // ---------------------------------------------------------------------------
-// Internal: write a single connection record (no Firebase object read)
+// Internal: build connection data (pure, no Firebase write)
 // ---------------------------------------------------------------------------
 
-async function _writeConnection(
-  boardId: string,
+function _buildConnectionData(
   fromId: string,
   toId: string,
   fromObj: BoardObjectLite,
   toObj: BoardObjectLite,
   options: ConnectorOptions,
   userId: string
-): Promise<string> {
+): { id: string; data: Record<string, unknown> } {
   const autoAnchors = autoSelectAnchors(fromObj, toObj);
   const fromAnchor = options.fromAnchor ?? autoAnchors.fromAnchor;
   const toAnchor = options.toAnchor ?? autoAnchors.toAnchor;
@@ -182,7 +193,7 @@ async function _writeConnection(
     toId,
     fromAnchor,
     toAnchor,
-    color: options.color ? mapColorNameToHex(options.color) : BOARD_PALETTE_HEX[2],
+    color: options.color ? mapColorNameToHex(options.color) : PALETTE.blue,
     createdBy: userId,
     createdAt: Date.now(),
   };
@@ -190,6 +201,20 @@ async function _writeConnection(
   const flat = flattenWaypoints(options);
   if (flat) data['points'] = flat;
 
+  return { id, data };
+}
+
+/** Write a single connection record (used by createConnector only). */
+async function _writeConnection(
+  boardId: string,
+  fromId: string,
+  toId: string,
+  fromObj: BoardObjectLite,
+  toObj: BoardObjectLite,
+  options: ConnectorOptions,
+  userId: string
+): Promise<string> {
+  const { id, data } = _buildConnectionData(fromId, toId, fromObj, toObj, options, userId);
   await admin.database().ref(`boards/${boardId}/connections/${id}`).set(data);
   return id;
 }
@@ -272,6 +297,32 @@ export async function createFrame(
   return id;
 }
 
+export async function createText(
+  boardId: string,
+  text: string,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  color: string,
+  userId: string
+): Promise<string> {
+  const id = randomUUID();
+  await admin.database().ref(`boards/${boardId}/objects/${id}`).set({
+    id,
+    type: 'text',
+    text,
+    x,
+    y,
+    width,
+    height,
+    color,
+    createdBy: userId,
+    createdAt: Date.now(),
+  });
+  return id;
+}
+
 // ---------------------------------------------------------------------------
 // Batch creation — single multi-path Firebase write for multiple objects
 // ---------------------------------------------------------------------------
@@ -326,6 +377,18 @@ export async function createBatch(
           text: String(op.params['title'] ?? ''),
           x, y, width: w, height: h,
           color: '#12121a',
+          createdBy: userId, createdAt: Date.now(),
+        };
+        break;
+      }
+      case 'createText': {
+        w = Number(op.params['width'] ?? 240);
+        h = Number(op.params['height'] ?? 60);
+        obj = {
+          id, type: 'text',
+          text: String(op.params['text'] ?? ''),
+          x, y, width: w, height: h,
+          color: String(op.params['color'] ?? '#1a1a1a'),
           createdBy: userId, createdAt: Date.now(),
         };
         break;
@@ -389,6 +452,7 @@ export async function createMultiPointConnector(
   const missing = objectIds.find((id) => !objects[id]);
   if (missing) throw new Error(`Object not found: ${missing}`);
 
+  const updates: Record<string, unknown> = {};
   const connectionIds: string[] = [];
 
   for (let i = 0; i < objectIds.length - 1; i++) {
@@ -404,14 +468,16 @@ export async function createMultiPointConnector(
       waypoints = [{ x: midX, y: midY + 30 }];
     }
 
-    const connId = await _writeConnection(
-      boardId, fromId, toId, fromObj, toObj,
+    const { id, data } = _buildConnectionData(
+      fromId, toId, fromObj, toObj,
       { color: options.color, points: waypoints },
       userId
     );
-    connectionIds.push(connId);
+    updates[`boards/${boardId}/connections/${id}`] = data;
+    connectionIds.push(id);
   }
 
+  await admin.database().ref().update(updates);
   return connectionIds;
 }
 
@@ -425,43 +491,40 @@ export async function connectInSequence(
     throw new Error('Need at least 2 objects to connect');
   }
 
-  // Read objects once (instead of once per connector)
+  // Read objects once for all connections
   const objectsSnap = await admin
     .database()
     .ref(`boards/${boardId}/objects`)
     .once('value');
   const objects: Record<string, BoardObjectLite> = objectsSnap.val() ?? {};
 
+  const updates: Record<string, unknown> = {};
   const connectionIds: string[] = [];
 
+  // Build forward pairs (and optionally reverse pairs for bidirectional)
+  const pairs: [string, string][] = [];
   for (let i = 0; i < objectIds.length - 1; i++) {
-    const fromId = objectIds[i];
-    const toId = objectIds[i + 1];
-    if (!objects[fromId]) throw new Error(`Object not found: ${fromId}`);
-    if (!objects[toId]) throw new Error(`Object not found: ${toId}`);
-    const id = await _writeConnection(
-      boardId, fromId, toId, objects[fromId], objects[toId],
-      { color: options.color },
-      userId
-    );
-    connectionIds.push(id);
+    pairs.push([objectIds[i], objectIds[i + 1]]);
   }
-
   if (options.direction === 'bidirectional') {
     for (let i = objectIds.length - 1; i > 0; i--) {
-      const fromId = objectIds[i];
-      const toId = objectIds[i - 1];
-      if (!objects[fromId]) throw new Error(`Object not found: ${fromId}`);
-      if (!objects[toId]) throw new Error(`Object not found: ${toId}`);
-      const id = await _writeConnection(
-        boardId, fromId, toId, objects[fromId], objects[toId],
-        { color: options.color },
-        userId
-      );
-      connectionIds.push(id);
+      pairs.push([objectIds[i], objectIds[i - 1]]);
     }
   }
 
+  for (const [fromId, toId] of pairs) {
+    if (!objects[fromId]) throw new Error(`Object not found: ${fromId}`);
+    if (!objects[toId]) throw new Error(`Object not found: ${toId}`);
+    const { id, data } = _buildConnectionData(
+      fromId, toId, objects[fromId], objects[toId],
+      { color: options.color },
+      userId
+    );
+    updates[`boards/${boardId}/connections/${id}`] = data;
+    connectionIds.push(id);
+  }
+
+  await admin.database().ref().update(updates);
   return connectionIds;
 }
 
@@ -527,7 +590,7 @@ export async function connectBatch(
       toId: conn.toId,
       fromAnchor,
       toAnchor,
-      color: options.color ? mapColorNameToHex(options.color) : BOARD_PALETTE_HEX[2],
+      color: options.color ? mapColorNameToHex(options.color) : PALETTE.blue,
       createdBy: userId,
       createdAt: Date.now(),
     };
@@ -648,13 +711,14 @@ export function compressBoardState(state: {
   return { objects, connections };
 }
 
-/** Reference canvas size for viewport-to-world rect (px). */
+/** Fallback canvas size if actual dimensions are not provided. */
 const VIEWPORT_CANVAS_WIDTH = 1200;
 const VIEWPORT_CANVAS_HEIGHT = 800;
 
 export interface BoardContextOptions {
   selectedIds?: string[];
-  viewport?: { x: number; y: number; scale: number };
+  /** width/height are the actual canvas pixel dimensions for accurate viewport filtering. */
+  viewport?: { x: number; y: number; scale: number; width?: number; height?: number };
 }
 
 /** Returns compressed board state, optionally filtered by selection or viewport. */
@@ -679,8 +743,8 @@ export async function getBoardContext(
     const { x, y, scale } = options.viewport;
     const left = -x / scale;
     const top = -y / scale;
-    const w = VIEWPORT_CANVAS_WIDTH / scale;
-    const h = VIEWPORT_CANVAS_HEIGHT / scale;
+    const w = (options.viewport.width ?? VIEWPORT_CANVAS_WIDTH) / scale;
+    const h = (options.viewport.height ?? VIEWPORT_CANVAS_HEIGHT) / scale;
     objectIds = new Set<string>();
     for (const [id, obj] of Object.entries(objects)) {
       if (!obj || typeof obj !== 'object') continue;
@@ -725,4 +789,56 @@ export async function getBoardState(boardId: string): Promise<{
     objects: objSnap.val() ?? {},
     connections: connSnap.val() ?? {},
   };
+}
+
+// ---------------------------------------------------------------------------
+// Frame membership + layer control + rotation
+// ---------------------------------------------------------------------------
+
+export async function addToFrame(
+  boardId: string,
+  objectIds: string[],
+  frameId: string
+): Promise<void> {
+  if (objectIds.length === 0) return;
+  const updates: Record<string, unknown> = {};
+  for (const id of objectIds) {
+    updates[`boards/${boardId}/objects/${id}/frameId`] = frameId;
+  }
+  await admin.database().ref().update(updates);
+}
+
+export async function setLayer(
+  boardId: string,
+  objectId: string,
+  sentToBack: boolean
+): Promise<void> {
+  await admin.database().ref(`boards/${boardId}/objects/${objectId}`).update({ sentToBack });
+}
+
+export async function rotateObject(
+  boardId: string,
+  objectId: string,
+  rotation: number
+): Promise<void> {
+  await admin.database().ref(`boards/${boardId}/objects/${objectId}`).update({ rotation });
+}
+
+// ---------------------------------------------------------------------------
+// Agent status (for live UI streaming)
+// ---------------------------------------------------------------------------
+
+export interface AgentStatus {
+  phase: 'thinking' | 'calling_tools';
+  iteration?: number;
+  maxIterations?: number;
+  tools?: string[];
+}
+
+export async function writeAgentStatus(boardId: string, status: AgentStatus): Promise<void> {
+  await admin.database().ref(`boards/${boardId}/agentStatus`).set(status);
+}
+
+export async function clearAgentStatus(boardId: string): Promise<void> {
+  await admin.database().ref(`boards/${boardId}/agentStatus`).remove();
 }
