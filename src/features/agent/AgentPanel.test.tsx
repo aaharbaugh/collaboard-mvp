@@ -76,7 +76,7 @@ describe('AgentPanel', () => {
     const input = screen.getByRole('textbox', { name: /ai command/i });
     await user.type(input, 'Create a SWOT analysis');
     await user.click(screen.getByRole('button', { name: /^ask$/i }));
-    expect(mockRunCommand).toHaveBeenCalledWith('Create a SWOT analysis');
+    expect(mockRunCommand).toHaveBeenCalledWith('Create a SWOT analysis', { selectedIds: undefined, viewport: undefined });
   });
 
   it('clears the input after a successful command', async () => {

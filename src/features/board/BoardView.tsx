@@ -254,7 +254,13 @@ export function BoardView() {
           />
         </div>
       </div>
-      <AgentPanel boardId={boardId} isOpen={isAiOpen} onClose={() => setIsAiOpen(false)} />
+      <AgentPanel
+            boardId={boardId}
+            isOpen={isAiOpen}
+            onClose={() => setIsAiOpen(false)}
+            selectedIds={selectedIds}
+            viewport={viewport}
+          />
     </div>
   );
 }

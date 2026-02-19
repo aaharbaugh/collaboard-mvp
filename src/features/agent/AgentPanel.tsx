@@ -5,6 +5,8 @@ interface AgentPanelProps {
   boardId: string;
   isOpen: boolean;
   onClose: () => void;
+  selectedIds?: string[];
+  viewport?: { x: number; y: number; scale: number };
 }
 
 const EXAMPLE_COMMANDS = [
@@ -14,7 +16,7 @@ const EXAMPLE_COMMANDS = [
   'Connect all rectangles in sequence with arrows',
 ];
 
-export function AgentPanel({ boardId, isOpen, onClose }: AgentPanelProps) {
+export function AgentPanel({ boardId, isOpen, onClose, selectedIds, viewport }: AgentPanelProps) {
   const [command, setCommand] = useState('');
   const { runCommand, loading, error } = useAgentCommand(boardId);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -42,7 +44,7 @@ export function AgentPanel({ boardId, isOpen, onClose }: AgentPanelProps) {
     e.preventDefault();
     if (!command.trim() || loading) return;
     try {
-      await runCommand(command);
+      await runCommand(command, { selectedIds, viewport });
       setCommand('');
     } catch {
       // error shown via hook state

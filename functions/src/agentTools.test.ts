@@ -48,27 +48,27 @@ beforeEach(() => {
 // mapColorNameToHex
 // ---------------------------------------------------------------------------
 describe('mapColorNameToHex', () => {
-  it('maps known color names to hex', () => {
-    expect(mapColorNameToHex('yellow')).toBe('#FFD700');
-    expect(mapColorNameToHex('pink')).toBe('#FFC0CB');
-    expect(mapColorNameToHex('blue')).toBe('#4A90E2');
-    expect(mapColorNameToHex('green')).toBe('#7ED321');
-    expect(mapColorNameToHex('orange')).toBe('#FF6B00');
-    expect(mapColorNameToHex('purple')).toBe('#9013FE');
+  it('maps known color names to board palette hex', () => {
+    expect(mapColorNameToHex('yellow')).toBe('#f5e6ab');
+    expect(mapColorNameToHex('pink')).toBe('#e8c5c5');
+    expect(mapColorNameToHex('blue')).toBe('#c5d5e8');
+    expect(mapColorNameToHex('green')).toBe('#d4e4bc');
+    expect(mapColorNameToHex('lavender')).toBe('#d4c5e8');
+    expect(mapColorNameToHex('purple')).toBe('#d4c5e8');
   });
 
-  it('passes hex codes through unchanged', () => {
-    expect(mapColorNameToHex('#AABBCC')).toBe('#AABBCC');
-    expect(mapColorNameToHex('#fff')).toBe('#fff');
+  it('passes board palette hex through unchanged', () => {
+    expect(mapColorNameToHex('#f5e6ab')).toBe('#f5e6ab');
+    expect(mapColorNameToHex('#d4e4bc')).toBe('#d4e4bc');
   });
 
   it('handles case-insensitive color names', () => {
-    expect(mapColorNameToHex('Yellow')).toBe('#FFD700');
-    expect(mapColorNameToHex('PINK')).toBe('#FFC0CB');
+    expect(mapColorNameToHex('Yellow')).toBe('#f5e6ab');
+    expect(mapColorNameToHex('PINK')).toBe('#e8c5c5');
   });
 
-  it('returns unknown strings unchanged', () => {
-    expect(mapColorNameToHex('chartreuse')).toBe('chartreuse');
+  it('defaults unknown names to warm yellow', () => {
+    expect(mapColorNameToHex('chartreuse')).toBe('#f5e6ab');
   });
 });
 
@@ -139,7 +139,7 @@ describe('createStickyNote', () => {
         y: 200,
         width: 160,
         height: 120,
-        color: '#FFD700',
+        color: '#f5e6ab',
         createdBy: 'u1',
       })
     );
@@ -175,7 +175,7 @@ describe('createShape', () => {
 
   it('maps color names', async () => {
     await createShape('b1', 'rectangle', 0, 0, 100, 80, 'purple', 'u1');
-    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ color: '#9013FE' }));
+    expect(mockSet).toHaveBeenCalledWith(expect.objectContaining({ color: '#d4c5e8' }));
   });
 });
 
@@ -232,14 +232,14 @@ describe('createConnector', () => {
   it('uses custom color when provided', async () => {
     await createConnector('b1', 'f1', 't1', { color: 'pink' }, 'u1');
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ color: '#FFC0CB' })
+      expect.objectContaining({ color: '#e8c5c5' })
     );
   });
 
   it('defaults to cyan color', async () => {
     await createConnector('b1', 'f1', 't1', {}, 'u1');
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ color: '#00d4ff' })
+      expect.objectContaining({ color: '#c5d5e8' })
     );
   });
 
@@ -251,6 +251,21 @@ describe('createConnector', () => {
     );
     expect(mockSet).toHaveBeenCalledWith(
       expect.objectContaining({ points: [125, 200, 150, 250] })
+    );
+  });
+
+  it('resolves relative waypoints when pointsRelative is true', async () => {
+    await createConnector(
+      'b1', 'f1', 't1',
+      {
+        points: [{ x: 100, y: 140 }, { x: 50, y: 30 }],
+        pointsRelative: true,
+      },
+      'u1'
+    );
+    // First point absolute (100,140); second is (100+50, 140+30) = (150, 170)
+    expect(mockSet).toHaveBeenCalledWith(
+      expect.objectContaining({ points: [100, 140, 150, 170] })
     );
   });
 
@@ -403,12 +418,12 @@ describe('updateText', () => {
 describe('changeColor', () => {
   it('updates color (mapping name to hex)', async () => {
     await changeColor('b1', 'obj1', 'yellow');
-    expect(mockUpdate).toHaveBeenCalledWith({ color: '#FFD700' });
+    expect(mockUpdate).toHaveBeenCalledWith({ color: '#f5e6ab' });
   });
 
-  it('passes hex codes through unchanged', async () => {
+  it('defaults non-palette hex to warm yellow', async () => {
     await changeColor('b1', 'obj1', '#ABCDEF');
-    expect(mockUpdate).toHaveBeenCalledWith({ color: '#ABCDEF' });
+    expect(mockUpdate).toHaveBeenCalledWith({ color: '#f5e6ab' });
   });
 });
 

@@ -39,6 +39,10 @@ export interface AgentCommandRequest {
   command: string;
   userId: string;
   userName: string;
+  /** When set, only these objects (and their connections) are sent as context. */
+  selectedIds?: string[];
+  /** When set (and no selection), only objects in visible viewport are sent. */
+  viewport?: { x: number; y: number; scale: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -60,7 +64,7 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
 export async function runAgentCommand(
   params: AgentCommandRequest
 ): Promise<{ success: boolean; message: string }> {
-  const { boardId, command, userId, userName } = params;
+  const { boardId, command, userId, userName, selectedIds, viewport } = params;
 
   // Validate board exists
   const boardSnap = await admin.database().ref(`boards/${boardId}`).once('value');
@@ -68,14 +72,27 @@ export async function runAgentCommand(
     throw new Error('Board not found');
   }
 
-  // Get current board state for context
-  const boardState = await agentTools.getBoardState(boardId);
+  // Get compressed board context (selection, viewport, or full)
+  const boardState = await agentTools.getBoardContext(boardId, {
+    selectedIds: selectedIds?.length ? selectedIds : undefined,
+    viewport: viewport ?? undefined,
+  });
 
   // LangFuse observability
   const trace = getLangfuse().trace({
     name: 'agent-command',
     userId,
-    metadata: { boardId, command, userName },
+    metadata: { boardId, userName },
+  });
+  trace.update({
+    input: {
+      boardId,
+      command,
+      userId,
+      userName,
+      ...(selectedIds?.length && { selectedIds }),
+      ...(viewport && { viewport }),
+    },
   });
 
   const messages: OpenAI.ChatCompletionMessageParam[] = [
@@ -143,7 +160,13 @@ export async function runAgentCommand(
       messages.push(...toolResults);
     }
 
-    return { success: true, message: `Executed ${totalToolCalls} operations` };
+    const result = { success: true, message: `Executed ${totalToolCalls} operations` };
+    trace.update({ output: { success: true, message: result.message, totalToolCalls } });
+    return result;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    trace.update({ output: { success: false, error: message } });
+    throw err;
   } finally {
     await getLangfuse().flushAsync();
   }
@@ -255,53 +278,20 @@ async function dispatchTool(
 // ---------------------------------------------------------------------------
 
 function buildSystemPrompt(boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> }): string {
-  return `You are an AI agent controlling a collaborative whiteboard.
+  const objCount = Object.keys(boardState.objects).length;
+  const connCount = Object.keys(boardState.connections).length;
+  const stateJson = JSON.stringify(boardState);
 
-Current board state:
-${JSON.stringify(boardState, null, 2)}
+  return `You are an AI agent for a collaborative whiteboard. Use only tool calls.
 
-TOOLS AVAILABLE:
-- createStickyNote(text, x, y, color): Creates a sticky note (160x120px)
-- createShape(type, x, y, width, height, color): Creates rectangle, circle, or star
-- createFrame(title, x, y, width, height): Creates a labeled frame/container (default 320x220px)
-- createConnector(fromId, toId, options?): Connects two objects with an arrow
-  - options.fromAnchor: 'top'|'bottom'|'left'|'right'|'top-left'|'top-right'|'bottom-left'|'bottom-right'|'star-0'...'star-4'
-  - options.toAnchor: same options as fromAnchor
-  - options.color: line color (default '#00d4ff')
-  - options.points: [{x,y}] waypoints for curved/bent lines
-- createMultiPointConnector(objectIds, options?): Connects multiple objects with curved lines
-- connectInSequence(objectIds, options?): Connects objects A→B→C→D in order
-- moveObject(objectId, x, y): Moves object to new position
-- resizeObject(objectId, width, height): Resizes object
-- updateText(objectId, newText): Updates text content
-- changeColor(objectId, color): Changes object color
-- getBoardState(): Returns current objects and connections
+Board context (${objCount} objects, ${connCount} connections):
+${stateJson}
 
-COORDINATE SYSTEM: x increases right, y increases down. Origin (0,0) top-left.
-SPACING: 50px minimum between objects. Use 150px for flowchart steps.
-BOARD AREA: Place content in (0,0) to (2000,2000) range.
+Rules: x right, y down; origin top-left. Spacing ≥50px. Place in (0,0)–(2000,2000).
+Colors: use only these hex values: ${agentTools.BOARD_PALETTE_HEX.join(', ')}.
 
-OBJECT TYPES: stickyNote, rectangle, circle, star, text, frame
-COLOR NAMES: yellow, pink, blue, green, orange, purple (or hex codes)
-
-ANCHOR SYSTEM:
-- Rectangles/Frames/Sticky Notes: top, bottom, left, right, top-left, top-right, bottom-left, bottom-right
-- Circles: top, bottom, left, right
-- Stars: star-0 (top), star-1, star-2, star-3, star-4 (clockwise)
-
-IMPORTANT WORKFLOW:
-1. Call getBoardState first to understand the current board
-2. Create objects first to get their IDs
-3. Use returned IDs to create connections in subsequent calls
-4. The tool result content contains the created object ID (as a JSON string)
-
-PATTERNS:
-- Flowchart: createShape(circle) → createShape(rectangle) → ... → connectInSequence([id1,id2,...])
-- Mind map: createShape(circle, center) → createStickyNote(branches...) → createConnector(center,branch) x N
-- Org chart: createShape(rectangle, top) → createShape(rectangle, children...) → connectInSequence
-- SWOT: createFrame("Strengths",...) × 4, arrange in 2×2 grid
-
-Always use tool calls. Never return plain text responses.`;
+Tools: createStickyNote, createShape, createFrame, createConnector (use options.points for bent/multi-waypoint arrows), createMultiPointConnector, connectInSequence, moveObject, resizeObject, updateText, changeColor, getBoardState (call only if you need full board).
+Create objects first to get IDs; use returned IDs for connections. Tool results contain the new ID as JSON.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -368,7 +358,7 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'createConnector',
-        description: 'Connect two objects with an arrow. Returns the connection ID.',
+        description: 'Connect two objects with an arrow. Use options.points with multiple {x,y} waypoints for bent lines or polyline paths (e.g. face outline between two notes). Returns the connection ID.',
         parameters: {
           type: 'object',
           properties: {
@@ -385,7 +375,7 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
                   type: 'string',
                   enum: ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'star-0', 'star-1', 'star-2', 'star-3', 'star-4'],
                 },
-                color: { type: 'string' },
+                color: { type: 'string', description: 'Board palette hex only' },
                 points: {
                   type: 'array',
                   items: {
@@ -393,7 +383,11 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
                     properties: { x: { type: 'number' }, y: { type: 'number' } },
                     required: ['x', 'y'],
                   },
-                  description: 'Waypoints for curved/bent paths',
+                  description: 'Waypoints between from and to. Multiple points create a polyline. Use for bent or complex paths.',
+                },
+                pointsRelative: {
+                  type: 'boolean',
+                  description: 'If true, points[0] is absolute {x,y}; points[1+] are {dx,dy} relative to previous. Reduces payload size.',
                 },
               },
             },

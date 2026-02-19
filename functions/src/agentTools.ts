@@ -18,6 +18,8 @@ export interface ConnectorOptions {
   color?: string;
   /** Waypoints in {x,y} format; converted to flat number[] for Firebase */
   points?: WaypointXY[];
+  /** If true, points[0] is absolute {x,y}, points[1..] are {dx,dy} relative to previous. Resolved to absolute before storing. */
+  pointsRelative?: boolean;
 }
 
 export interface MultiPointOptions {
@@ -34,17 +36,42 @@ export interface SequenceOptions {
 // Helpers
 // ---------------------------------------------------------------------------
 
+/** Board palette (must match ColorPicker PALETTE in frontend). Only these colors are allowed. */
+export const BOARD_PALETTE_HEX = [
+  '#f5e6ab', // warm yellow
+  '#d4e4bc', // sage green
+  '#c5d5e8', // soft blue
+  '#e8c5c5', // dusty rose
+  '#d4c5e8', // lavender
+  '#c5e8d4', // mint
+  '#e8d4c5', // peach
+  '#e0e0d0', // light grey
+] as const;
+
 const COLOR_MAP: Record<string, string> = {
-  yellow: '#FFD700',
-  pink: '#FFC0CB',
-  blue: '#4A90E2',
-  green: '#7ED321',
-  orange: '#FF6B00',
-  purple: '#9013FE',
+  yellow: '#f5e6ab',
+  warmyellow: '#f5e6ab',
+  green: '#d4e4bc',
+  sagegreen: '#d4e4bc',
+  blue: '#c5d5e8',
+  softblue: '#c5d5e8',
+  pink: '#e8c5c5',
+  dustyrose: '#e8c5c5',
+  lavender: '#d4c5e8',
+  purple: '#d4c5e8',
+  mint: '#c5e8d4',
+  peach: '#e8d4c5',
+  grey: '#e0e0d0',
+  gray: '#e0e0d0',
+  lightgrey: '#e0e0d0',
 };
 
 export function mapColorNameToHex(color: string): string {
-  return COLOR_MAP[color.toLowerCase()] ?? color;
+  const key = color.toLowerCase().replace(/\s+/g, '');
+  if (COLOR_MAP[key]) return COLOR_MAP[key];
+  // If already a valid palette hex, pass through
+  if (BOARD_PALETTE_HEX.includes(color as (typeof BOARD_PALETTE_HEX)[number])) return color;
+  return COLOR_MAP.yellow ?? BOARD_PALETTE_HEX[0];
 }
 
 export function autoSelectAnchors(
@@ -67,6 +94,31 @@ export function autoSelectAnchors(
   return dy >= 0
     ? { fromAnchor: 'bottom', toAnchor: 'top' }
     : { fromAnchor: 'top', toAnchor: 'bottom' };
+}
+
+/** Anchor offset from center (half-size). Used for resolving relative waypoints from from-anchor. */
+function anchorOffset(w: number, h: number, anchor: string): { x: number; y: number } {
+  switch (anchor) {
+    case 'top': return { x: 0, y: -h / 2 };
+    case 'bottom': return { x: 0, y: h / 2 };
+    case 'left': return { x: -w / 2, y: 0 };
+    case 'right': return { x: w / 2, y: 0 };
+    case 'top-left': return { x: -w / 2, y: -h / 2 };
+    case 'top-right': return { x: w / 2, y: -h / 2 };
+    case 'bottom-left': return { x: -w / 2, y: h / 2 };
+    case 'bottom-right': return { x: w / 2, y: h / 2 };
+    default: return { x: w / 2, y: -h / 2 };
+  }
+}
+
+export function getAnchorWorldPoint(
+  obj: { x: number; y: number; width: number; height: number },
+  anchor: string
+): { x: number; y: number } {
+  const cx = obj.x + obj.width / 2;
+  const cy = obj.y + obj.height / 2;
+  const off = anchorOffset(obj.width, obj.height, anchor);
+  return { x: cx + off.x, y: cy + off.y };
 }
 
 // ---------------------------------------------------------------------------
@@ -182,14 +234,30 @@ export async function createConnector(
     toId,
     fromAnchor,
     toAnchor,
-    color: options.color ? mapColorNameToHex(options.color) : '#00d4ff',
+    color: options.color ? mapColorNameToHex(options.color) : BOARD_PALETTE_HEX[2],
     createdBy: userId,
     createdAt: Date.now(),
   };
 
-  // Convert {x,y}[] waypoints to flat number[] for Firebase (Connection.points type)
+  // Convert waypoints to flat number[] for Firebase (Connection.points type)
   if (options.points && options.points.length > 0) {
-    data['points'] = options.points.flatMap((p) => [p.x, p.y]);
+    let flat: number[];
+    if (options.pointsRelative) {
+      const abs: WaypointXY[] = [];
+      for (let i = 0; i < options.points.length; i++) {
+        const p = options.points[i];
+        if (i === 0) {
+          abs.push({ x: p.x, y: p.y });
+        } else {
+          const prev = abs[i - 1];
+          abs.push({ x: prev.x + p.x, y: prev.y + p.y });
+        }
+      }
+      flat = abs.flatMap((p) => [p.x, p.y]);
+    } else {
+      flat = options.points.flatMap((p) => [p.x, p.y]);
+    }
+    data['points'] = flat;
   }
 
   await admin.database().ref(`boards/${boardId}/connections/${id}`).set(data);
@@ -327,6 +395,98 @@ export async function changeColor(
 // ---------------------------------------------------------------------------
 // Board state
 // ---------------------------------------------------------------------------
+
+const COMPRESS_OBJECT_KEYS = ['id', 'type', 'x', 'y', 'width', 'height', 'text', 'color'] as const;
+const COMPRESS_CONNECTION_KEYS = ['id', 'fromId', 'toId', 'fromAnchor', 'toAnchor', 'color', 'points'] as const;
+
+function pick<T extends Record<string, unknown>>(obj: T, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of keys) {
+    if (obj[k] !== undefined) out[k] = obj[k];
+  }
+  return out;
+}
+
+export function compressBoardState(state: {
+  objects: Record<string, unknown>;
+  connections: Record<string, unknown>;
+}): { objects: Record<string, unknown>; connections: Record<string, unknown> } {
+  const objects: Record<string, unknown> = {};
+  for (const [id, obj] of Object.entries(state.objects)) {
+    if (obj && typeof obj === 'object') objects[id] = pick(obj as Record<string, unknown>, COMPRESS_OBJECT_KEYS);
+  }
+  const connections: Record<string, unknown> = {};
+  for (const [id, conn] of Object.entries(state.connections)) {
+    if (conn && typeof conn === 'object') connections[id] = pick(conn as Record<string, unknown>, COMPRESS_CONNECTION_KEYS);
+  }
+  return { objects, connections };
+}
+
+/** Reference canvas size for viewport-to-world rect (px). */
+const VIEWPORT_CANVAS_WIDTH = 1200;
+const VIEWPORT_CANVAS_HEIGHT = 800;
+
+export interface BoardContextOptions {
+  selectedIds?: string[];
+  viewport?: { x: number; y: number; scale: number };
+}
+
+/** Returns compressed board state, optionally filtered by selection or viewport. */
+export async function getBoardContext(
+  boardId: string,
+  options?: BoardContextOptions
+): Promise<{ objects: Record<string, unknown>; connections: Record<string, unknown> }> {
+  const raw = await getBoardState(boardId);
+  const objects = raw.objects as Record<string, Record<string, unknown>>;
+  const connections = raw.connections as Record<string, Record<string, unknown>>;
+
+  let objectIds: Set<string>;
+  if (options?.selectedIds?.length) {
+    objectIds = new Set(options.selectedIds);
+    // Include connections that reference any selected object
+    for (const conn of Object.values(connections)) {
+      if (conn && conn.fromId && conn.toId && (objectIds.has(conn.fromId as string) || objectIds.has(conn.toId as string))) {
+        objectIds.add(conn.fromId as string);
+        objectIds.add(conn.toId as string);
+      }
+    }
+  } else if (options?.viewport) {
+    const { x, y, scale } = options.viewport;
+    const left = -x / scale;
+    const top = -y / scale;
+    const w = VIEWPORT_CANVAS_WIDTH / scale;
+    const h = VIEWPORT_CANVAS_HEIGHT / scale;
+    objectIds = new Set<string>();
+    for (const [id, obj] of Object.entries(objects)) {
+      if (!obj || typeof obj !== 'object') continue;
+      const ox = Number(obj.x);
+      const oy = Number(obj.y);
+      const ow = Number(obj.width) ?? 0;
+      const oh = Number(obj.height) ?? 0;
+      if (ox + ow >= left && ox <= left + w && oy + oh >= top && oy <= top + h) objectIds.add(id);
+    }
+    for (const conn of Object.values(connections)) {
+      if (conn && conn.fromId && conn.toId && (objectIds.has(conn.fromId as string) || objectIds.has(conn.toId as string))) {
+        objectIds.add(conn.fromId as string);
+        objectIds.add(conn.toId as string);
+      }
+    }
+  } else {
+    return compressBoardState(raw);
+  }
+
+  const filteredObjects: Record<string, unknown> = {};
+  for (const id of objectIds) {
+    if (objects[id]) filteredObjects[id] = objects[id];
+  }
+  const filteredConnections: Record<string, unknown> = {};
+  for (const [cid, conn] of Object.entries(connections)) {
+    if (conn && conn.fromId && conn.toId && objectIds.has(conn.fromId as string) && objectIds.has(conn.toId as string)) {
+      filteredConnections[cid] = conn;
+    }
+  }
+  return compressBoardState({ objects: filteredObjects, connections: filteredConnections });
+}
 
 export async function getBoardState(boardId: string): Promise<{
   objects: Record<string, unknown>;

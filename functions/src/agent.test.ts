@@ -31,7 +31,11 @@ jest.mock('openai', () => ({
 // ---------------------------------------------------------------------------
 const mockGenerationEnd = jest.fn();
 const mockGenerationFn = jest.fn().mockReturnValue({ end: mockGenerationEnd });
-const mockTraceFn = jest.fn().mockReturnValue({ generation: mockGenerationFn });
+const mockTraceUpdate = jest.fn();
+const mockTraceFn = jest.fn().mockReturnValue({
+  generation: mockGenerationFn,
+  update: mockTraceUpdate,
+});
 const mockFlushAsync = jest.fn().mockResolvedValue(undefined);
 
 jest.mock('langfuse', () => ({
@@ -56,6 +60,8 @@ jest.mock('./agentTools', () => ({
   updateText: jest.fn().mockResolvedValue(undefined),
   changeColor: jest.fn().mockResolvedValue(undefined),
   getBoardState: jest.fn().mockResolvedValue({ objects: {}, connections: {} }),
+  getBoardContext: jest.fn().mockResolvedValue({ objects: {}, connections: {} }),
+  BOARD_PALETTE_HEX: ['#f5e6ab', '#d4e4bc', '#c5d5e8', '#e8c5c5', '#d4c5e8', '#c5e8d4', '#e8d4c5', '#e0e0d0'],
 }));
 
 // ---------------------------------------------------------------------------
