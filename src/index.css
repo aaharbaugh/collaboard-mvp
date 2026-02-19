@@ -446,6 +446,173 @@ body {
   font-size: 0.8rem;
 }
 
+/* Agent popup */
+.agent-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(44, 36, 22, 0.18);
+  z-index: 99;
+}
+
+.agent-popup {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 100;
+  width: 480px;
+  max-width: calc(100vw - 2rem);
+  background: var(--bg-card);
+  border: 2px solid var(--border-color);
+  border-radius: 2px;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  box-shadow: 0 4px 16px rgba(44, 36, 22, 0.15);
+}
+
+.agent-popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.1rem;
+}
+
+.agent-popup-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: "Courier New", "Courier", monospace;
+  color: var(--accent-green);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.agent-close-btn {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-family: "Courier New", "Courier", monospace;
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+  transition: all 0.15s;
+}
+
+.agent-close-btn:hover {
+  border-color: var(--accent-amber);
+  color: var(--accent-amber);
+}
+
+.agent-form {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.agent-input {
+  flex: 1;
+  padding: 0.4rem 0.6rem;
+  background: var(--bg-parchment);
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.82rem;
+  transition: border-color 0.15s;
+}
+
+.agent-input:focus {
+  outline: none;
+  border-color: var(--accent-green);
+}
+
+.agent-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agent-input::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
+}
+
+.agent-send-btn {
+  padding: 0.4rem 0.85rem;
+  background: var(--accent-green);
+  color: var(--bg-parchment);
+  border: 1px solid var(--accent-green);
+  border-radius: 2px;
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.agent-send-btn:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.agent-send-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.agent-error {
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.78rem;
+  color: var(--accent-amber);
+  border-left: 2px solid var(--accent-amber);
+  padding-left: 0.5rem;
+}
+
+.agent-examples-label {
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.2rem;
+}
+
+.agent-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.agent-example-btn {
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--border-light);
+  border-radius: 2px;
+  color: var(--text-muted);
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.75rem;
+  padding: 0.3rem 0.5rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  width: 100%;
+}
+
+.agent-example-btn:hover:not(:disabled) {
+  border-color: var(--accent-green);
+  color: var(--accent-green);
+}
+
+.agent-example-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
 /* Color picker */
 .color-picker {
   display: flex;

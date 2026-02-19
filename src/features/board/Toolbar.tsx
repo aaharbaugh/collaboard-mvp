@@ -41,9 +41,13 @@ function ShapePreviewIcons({ activeShape }: { activeShape: ToolMode }) {
 export interface ToolbarProps {
   /** Called when a hotkey (1–5) is pressed; use to clear selection and hide color bar */
   onHotkeyPress?: () => void;
+  /** Called when the AI button or hotkey [6] is triggered */
+  onAiToggle?: () => void;
+  /** Whether the AI panel is currently open (drives active state) */
+  isAiOpen?: boolean;
 }
 
-export function Toolbar({ onHotkeyPress }: ToolbarProps) {
+export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: ToolbarProps) {
   const { toolMode, setToolMode, cycleShapeTool, cyclePointerTool } = useBoardStore();
 
   useEffect(() => {
@@ -64,6 +68,10 @@ export function Toolbar({ onHotkeyPress }: ToolbarProps) {
 
       if (digit) {
         e.preventDefault();
+        if (digit === '6') {
+          onAiToggle?.();
+          return;
+        }
         onHotkeyPress?.();
         if (digit === '1') {
           cyclePointerTool();
@@ -79,7 +87,7 @@ export function Toolbar({ onHotkeyPress }: ToolbarProps) {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setToolMode, cycleShapeTool, cyclePointerTool, onHotkeyPress]);
+  }, [setToolMode, cycleShapeTool, cyclePointerTool, onHotkeyPress, onAiToggle]);
 
   const pointerLabel = POINTER_CYCLE.includes(toolMode) ? POINTER_LABELS[toolMode] : POINTER_LABELS[POINTER_CYCLE[0]];
   const isPointerActive = POINTER_CYCLE.includes(toolMode);
@@ -125,6 +133,12 @@ export function Toolbar({ onHotkeyPress }: ToolbarProps) {
           <span className="hotkey">[{hotkey}]</span> {label}
         </button>
       ))}
+      <button
+        className={`toolbar-btn ${isAiOpen ? 'active' : ''}`}
+        onClick={() => onAiToggle?.()}
+      >
+        <span className="hotkey">[6]</span> Ask AI
+      </button>
     </div>
   );
 }

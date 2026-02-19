@@ -34,6 +34,16 @@ export function Frame({ obj, isSelected, showSelectionBorder = true, remoteSelec
         dash={[8 / zoomScale, 4 / zoomScale]}
         listening={true}
       />
+      {obj.text && (
+        <Text
+          x={obj.x + 4}
+          y={obj.y - 20 / zoomScale}
+          text={obj.text}
+          fontSize={13 / zoomScale}
+          fill="#00d4ff"
+          fontFamily="system-ui, sans-serif"
+        />
+      )}
       {remoteSelectedBy && (
         <Text
           x={obj.x}

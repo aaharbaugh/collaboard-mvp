@@ -10,6 +10,7 @@ import { useCursorSync } from '../sync/useCursorSync';
 import { useBoardSync } from '../sync/useBoardSync';
 import { TextEditingOverlay } from '../../components/TextEditingOverlay';
 import { ColorPicker } from './components/ColorPicker';
+import { AgentPanel } from '../agent/AgentPanel';
 import {
   getPersistedEditState,
   setPersistedEditState,
@@ -20,6 +21,7 @@ export function BoardView() {
   const { user, signOut } = useAuth();
   const { boardId, loading: boardLoading, error: boardError } = useBoardId(user?.uid);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [isAiOpen, setIsAiOpen] = useState(false);
   const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
   const hasRestoredRef = useRef(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -245,9 +247,14 @@ export function BoardView() {
               </div>
             </div>
           )}
-          <Toolbar onHotkeyPress={clearSelectionOnHotkey} />
+          <Toolbar
+            onHotkeyPress={clearSelectionOnHotkey}
+            onAiToggle={() => setIsAiOpen((v) => !v)}
+            isAiOpen={isAiOpen}
+          />
         </div>
       </div>
+      <AgentPanel boardId={boardId} isOpen={isAiOpen} onClose={() => setIsAiOpen(false)} />
     </div>
   );
 }

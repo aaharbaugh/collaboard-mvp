@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "collabboard-111"
-  }
+    "default": "collabboard-111",
+    "Staging": "collab-together-111"
+  },
+  "targets": {},
+  "etags": {}
 }
