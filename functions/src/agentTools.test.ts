@@ -8,6 +8,7 @@ import {
   createShape,
   createFrame,
   createText,
+  executePlan,
   createConnector,
   createMultiPointConnector,
   connectInSequence,
@@ -261,6 +262,130 @@ describe('createText', () => {
   it('returns the generated id', async () => {
     const id = await createText('b1', 'Label', 0, 0, 200, 50, '#333', 'u1');
     expect(id).toBe('test-id-1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// executePlan
+// ---------------------------------------------------------------------------
+describe('executePlan', () => {
+  it('writes objects and connections in a SINGLE batch update', async () => {
+    await executePlan('b1', [
+      { tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 0,   y: 0, color: 'yellow' } },
+      { tempId: 's2', action: 'createStickyNote', params: { text: 'B', x: 300, y: 0, color: 'green'  } },
+    ], [
+      { fromId: 's1', toId: 's2' },
+    ], 'u1');
+
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    expect(mockSet).not.toHaveBeenCalled();
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const paths = Object.keys(updateArg);
+    expect(paths.filter(p => p.includes('/objects/'))).toHaveLength(2);
+    expect(paths.filter(p => p.includes('/connections/'))).toHaveLength(1);
+  });
+
+  it('resolves tempIds so connection uses actual Firebase IDs', async () => {
+    const result = await executePlan('b1', [
+      { tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 0,   y: 0, color: 'yellow' } },
+      { tempId: 's2', action: 'createStickyNote', params: { text: 'B', x: 300, y: 0, color: 'green'  } },
+    ], [
+      { fromId: 's1', toId: 's2' },
+    ], 'u1');
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const connPath = Object.keys(updateArg).find(p => p.includes('/connections/'))!;
+    const connData = updateArg[connPath] as Record<string, unknown>;
+
+    expect(connData.fromId).toBe(result.idMap['s1']);
+    expect(connData.toId).toBe(result.idMap['s2']);
+    expect(connData.fromId).not.toBe('s1');
+    expect(connData.toId).not.toBe('s2');
+  });
+
+  it('returns idMap with tempId→actualId entries', async () => {
+    const result = await executePlan('b1', [
+      { tempId: 'n1', action: 'createStickyNote', params: { text: 'A', x: 0, y: 0, color: 'yellow' } },
+      { tempId: 'n2', action: 'createShape',      params: { type: 'rectangle', x: 200, y: 0, width: 120, height: 80, color: 'blue' } },
+    ], [], 'u1');
+
+    expect(result.idMap['n1']).toMatch(/test-id-\d+/);
+    expect(result.idMap['n2']).toMatch(/test-id-\d+/);
+    expect(result.idMap['n1']).not.toBe(result.idMap['n2']);
+  });
+
+  it('works with no connections (objects only, single write)', async () => {
+    await executePlan('b1', [
+      { tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 0, y: 0, color: 'yellow' } },
+    ], [], 'u1');
+
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    expect(Object.keys(updateArg).every(p => p.includes('/objects/'))).toBe(true);
+  });
+
+  it('works with no objects (connections between existing IDs)', async () => {
+    // Existing objects already in cache
+    const cache = new Map([
+      ['existing-1', { x: 0,   y: 0, width: 160, height: 120 }],
+      ['existing-2', { x: 300, y: 0, width: 160, height: 120 }],
+    ]);
+    const result = await executePlan('b1', [], [
+      { fromId: 'existing-1', toId: 'existing-2' },
+    ], 'u1', cache);
+
+    expect(mockOnce).not.toHaveBeenCalled(); // no Firebase read needed (cache hit)
+    expect(result.connectionIds).toHaveLength(1);
+  });
+
+  it('populates cache with created objects', async () => {
+    const cache = new Map<string, { x: number; y: number; width: number; height: number }>();
+    const result = await executePlan('b1', [
+      { tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 10, y: 20, color: 'yellow' } },
+    ], [], 'u1', cache);
+
+    expect(cache.has(result.idMap['s1'])).toBe(true);
+    expect(cache.get(result.idMap['s1'])).toMatchObject({ x: 10, y: 20, width: 160, height: 120 });
+  });
+
+  it('auto-selects anchors from object geometry', async () => {
+    await executePlan('b1', [
+      { tempId: 'left',  action: 'createStickyNote', params: { text: 'L', x: 0,   y: 0, color: 'yellow' } },
+      { tempId: 'right', action: 'createStickyNote', params: { text: 'R', x: 300, y: 0, color: 'green'  } },
+    ], [
+      { fromId: 'left', toId: 'right' },
+    ], 'u1');
+
+    const updateArg = mockUpdate.mock.calls[0][0] as Record<string, unknown>;
+    const connPath = Object.keys(updateArg).find(p => p.includes('/connections/'))!;
+    const connData = updateArg[connPath] as Record<string, unknown>;
+    expect(connData.fromAnchor).toBe('right');
+    expect(connData.toAnchor).toBe('left');
+  });
+
+  it('throws for unknown object action', async () => {
+    await expect(
+      executePlan('b1', [
+        { tempId: 't1', action: 'createStickyNote' as const, params: { text: '', x: 0, y: 0 } },
+      ].map(op => ({ ...op, action: 'badAction' as 'createStickyNote' })), [], 'u1')
+    ).rejects.toThrow('Unknown executePlan object action');
+  });
+
+  it('fetches existing objects from Firebase when tempId is not found in cache', async () => {
+    // 'existing-obj' is not in cache — executePlan must fetch from Firebase
+    mockOnce.mockResolvedValue({
+      val: () => ({ 'existing-obj': { x: 500, y: 0, width: 160, height: 120 } }),
+    });
+
+    await executePlan('b1', [
+      { tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 0, y: 0, color: 'yellow' } },
+    ], [
+      { fromId: 's1', toId: 'existing-obj' },
+    ], 'u1');
+
+    expect(mockOnce).toHaveBeenCalledTimes(1); // fetched missing geometry
+    expect(mockUpdate).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -2,6 +2,7 @@ import * as admin from 'firebase-admin';
 import OpenAI from 'openai';
 import { Client, RunTree } from 'langsmith';
 import * as agentTools from './agentTools.js';
+import { executeTemplate } from './templateEngine.js';
 
 // Initialize Admin SDK once per cold start
 if (!admin.apps.length) {
@@ -10,11 +11,27 @@ if (!admin.apps.length) {
 
 // Lazily initialized to avoid crashing during Firebase deploy analysis (env vars not set at load time)
 let _openai: OpenAI | null = null;
+let _groq: OpenAI | null = null;
 let _langsmith: Client | null = null;
 
 function getOpenAI(): OpenAI {
   if (!_openai) _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
   return _openai;
+}
+
+/** Groq: OpenAI-compatible drop-in (~275 tok/s). Used for template content extraction. */
+function getGroqClient(): OpenAI | null {
+  const key = process.env.GROQ_API_KEY;
+  if (!key) return null;
+  if (!_groq) _groq = new OpenAI({ apiKey: key, baseURL: 'https://api.groq.com/openai/v1' });
+  return _groq;
+}
+
+/** Returns Groq (llama-3.3-70b-versatile) if configured, else OpenAI (gpt-4o-mini). */
+function getPreferredClient(): { client: OpenAI; model: string } {
+  const groq = getGroqClient();
+  if (groq) return { client: groq, model: 'llama-3.3-70b-versatile' };
+  return { client: getOpenAI(), model: 'gpt-4o' };
 }
 
 /** Returns null if LANGSMITH_API_KEY is missing or a placeholder — tracing is optional. */
@@ -63,8 +80,9 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 
 function estimateRequiredIterations(command: string): number {
-  const isComplex = /flowchart|flow chart|diagram|mind.?map|org.?chart|kanban|swot|mind map/i.test(command);
-  return isComplex ? 5 : 3;
+  // executePlan handles creation+connections in 1 call; allow 1 extra for post-processing
+  const needsPostProcessing = /frame|group|layer|background|kanban|swot/i.test(command);
+  return needsPostProcessing ? 3 : 2;
 }
 
 function detectPattern(command: string): string {
@@ -165,6 +183,34 @@ export async function runAgentCommand(
   let iterationsUsed = 0;
 
   try {
+    // -----------------------------------------------------------------------
+    // Fast path: template engine for recognized layout patterns
+    // -----------------------------------------------------------------------
+    if (estimatedPattern !== 'freeform') {
+      const { client: tmplClient, model: tmplModel } = getPreferredClient();
+      const templateResult = await executeTemplate(
+        estimatedPattern,
+        command,
+        { boardId, userId, viewport: viewport ?? undefined, cache: objectCache },
+        tmplClient,
+        tmplModel,
+      );
+      if (templateResult) {
+        if (rootRun && langsmith) {
+          await withTrace(() => langsmith!.createFeedback(rootRun!.id, 'template_used', { score: 1 }));
+          await withTrace(async () => {
+            await rootRun!.end({ success: true, message: templateResult.message, templatePattern: estimatedPattern });
+            await rootRun!.patchRun();
+          });
+        }
+        return { success: true, message: templateResult.message };
+      }
+      // Template returned null (unsupported pattern or error) → fall through to agentic loop
+    }
+
+    // -----------------------------------------------------------------------
+    // Agentic loop (freeform or template fallback)
+    // -----------------------------------------------------------------------
     for (let iter = 0; iter < maxIterations; iter++) {
       iterationsUsed = iter + 1;
 
@@ -175,7 +221,7 @@ export async function runAgentCommand(
         name: `openai-iter-${iter}`,
         run_type: 'llm',
         inputs: { messages },
-        extra: { invocation_params: { model: 'gpt-4o-mini' } },
+        extra: { invocation_params: { model: 'gpt-4o' } },
       }) ?? null;
       if (llmRun) await withTrace(() => llmRun!.postRun());
 
@@ -183,7 +229,7 @@ export async function runAgentCommand(
       try {
         response = await callWithRetry(() =>
           getOpenAI().chat.completions.create({
-            model: 'gpt-4o-mini',
+            model: 'gpt-4o',
             messages,
             tools: getToolDefinitions(),
             tool_choice: 'auto',
@@ -224,19 +270,26 @@ export async function runAgentCommand(
       // Dispatch all tool calls in parallel
       const toolResults = await Promise.all(
         toolCalls.map(async (tc) => {
-          const args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
           const spanStart = Date.now();
+          let result: unknown;
+          let args: Record<string, unknown> = {};
+          try {
+            args = JSON.parse(tc.function.arguments) as Record<string, unknown>;
+          } catch {
+            result = { error: `Invalid JSON in arguments for ${tc.function.name}` };
+          }
           const toolRun = rootRun?.createChild({
             name: `tool:${tc.function.name}`,
             run_type: 'tool',
             inputs: args,
           }) ?? null;
           if (toolRun) await withTrace(() => toolRun!.postRun());
-          let result: unknown;
-          try {
-            result = await dispatchTool(tc.function.name, args, boardId, userId, objectCache);
-          } catch (err: unknown) {
-            result = { error: String(err) };
+          if (!result) {
+            try {
+              result = await dispatchTool(tc.function.name, args, boardId, userId, objectCache);
+            } catch (err: unknown) {
+              result = { error: String(err) };
+            }
           }
           if (toolRun) {
             await withTrace(async () => {
@@ -364,6 +417,14 @@ async function dispatchTool(
         args['objectId'] as string,
         args['rotation'] as number
       );
+    case 'executePlan':
+      return agentTools.executePlan(
+        boardId,
+        (args['objects'] ?? []) as agentTools.BatchCreateOp[],
+        (args['connections'] ?? []) as agentTools.PlanConnection[],
+        userId,
+        cache
+      );
     case 'createBatch':
       return agentTools.createBatch(
         boardId,
@@ -399,6 +460,17 @@ async function dispatchTool(
         args['objectIds'] as string[],
         (args['options'] as agentTools.SequenceOptions) ?? {},
         userId
+      );
+    case 'moveBatch':
+      return agentTools.moveBatch(
+        boardId,
+        args['moves'] as Array<{ id: string; x: number; y: number }>
+      );
+    case 'fitFrameToContents':
+      return agentTools.fitFrameToContents(
+        boardId,
+        args['frameId'] as string,
+        (args['padding'] as number | undefined) ?? 40
       );
     case 'moveObject':
       return agentTools.moveObject(
@@ -532,111 +604,71 @@ ${options.selectedIds.join(', ')}
 Operations like "delete", "move", "change color" apply to these IDs unless told otherwise.`;
   }
 
-  return `You are the AI agent for CollabBoard, a real-time collaborative whiteboard.
-Respond ONLY with tool calls — never plain text (except one short confirmation when finished).
+  return `You are the AI agent for CollabBoard. Respond ONLY with tool calls (one short confirmation when done).
 
 === BOARD STATE ===
 ${stateBlock}
 (${objCount} objects, ${connCount} connections)
 ${viewportSection}${selectionSection}
 
-=== ALL PRIMITIVE TYPES ===
-stickyNote   - 160×120 colored card with text. Best for content/ideas.
-text         - Transparent heading/label (no background). Sizes: H1=240×60, H2=200×50, H3=180×44.
-               color = text color (dark #1a1a1a). Great for titles and section labels.
-rectangle    - Geometric box. Use for flowchart steps, diagram nodes.
-circle       - Geometric oval. Use for bubbles, process endpoints.
-star         - 5-point star.
-frame        - Labeled container. Create frame first, then addToFrame for children.
-               Children move/resize with the frame automatically.
+=== PRIMITIVES ===
+stickyNote 160×120 colored card — use for all text content/ideas
+text       transparent heading/label — H1=240×60 H2=200×50 H3=180×44, color=#1a1a1a
+rectangle/circle/star — geometric shapes for flowchart nodes, diagrams
+frame      labeled container — create first, then addToFrame children
 
-=== COORDINATE SYSTEM ===
-Origin: top-left. X increases right, Y increases down. Units: pixels.
-Canvas: (0,0)–(2000,2000). Sticky: 160×120. Shape default: 150×100. Text H1: 240×60.
-Minimum gap between objects: 60 px on all sides.
+=== COORDINATES ===
+Origin top-left, X→right, Y→down, pixels. Min gap: 60px.
+x = anchor_x + col*(w+80)  |  y = anchor_y + row*(h+80)
+Frame bounds: x=min(child_x)-40, y=min(child_y)-50, w/h=span+80
 
-=== LAYER SYSTEM ===
-By default objects sit above connection arrows.
-- setLayer(objectId, sentToBack=true): put object behind arrows (use for background shapes).
-- addToFrame(objectIds, frameId): group objects as frame children.
-Tip: Create a large colored rectangle, sentToBack=true, as a background section divider.
+=== LAYOUTS (cx,cy = viewport center) ===
+Flowchart H: nodes at (cx-N*140+i*280, cy) 200×120, connectInSequence
+Flowchart V: nodes at (cx, cy-N*100+i*200) 200×120, connectInSequence
+SWOT: Frame(cx-300,cy-280,700,600) | S(cx-240,cy-200,green) W(cx-240,cy+30,rose) O(cx+20,cy-200,yellow) T(cx+20,cy+30,peach) each 200×150
+Kanban 3-col: frames at (cx-450,cy-200),(cx-100,cy-200),(cx+250,cy-200) each 300×500
+Mind map: center node + branches at radius 300, angles 0,60,120,180,240,300°
 
-=== SPATIAL PLANNING — compute ALL coordinates before any tool calls ===
-1. Identify layout pattern: grid, flowchart, tree, cluster, kanban, comparison.
-2. Anchor at the viewport center (shown above) unless objects already exist nearby.
-   If the board has content, place new content to the right or below (>=100 px margin).
-3. Compute every (x,y) using:
-     x = anchor_x + col * (object_width + gap_x)   [gap_x ~= 80]
-     y = anchor_y + row * (object_height + gap_y)   [gap_y ~= 80]
-4. Frame bounds when enclosing objects:
-     frame_x = min(child_x) - 40,  frame_y = min(child_y) - 50  [title area]
-     frame_w = max(child_x+child_w) - frame_x + 40
-     frame_h = max(child_y+child_h) - frame_y + 40
-
-=== LAYOUT RECIPES ===
-SWOT — anchor at viewport center:
-  Frame (cx-300, cy-280) 700x600
-  Strengths (cx-240, cy-200) 200x150 #d4e4bc  | Opportunities (cx+20, cy-200) 200x150 #f5e6ab
-  Weaknesses (cx-240, cy+30) 200x150 #e8c5c5 | Threats       (cx+20, cy+30) 200x150 #e8d4c5
-
-Flowchart horizontal — steps at (cx-2*280+i*280, cy) 200x120 each; connectInSequence.
-Flowchart vertical   — steps at (cx, cy-2*200+i*200) 200x120 each; connectInSequence.
-Mind map — center (cx, cy); branches at radius 300, angles 0,60,120,180,240,300 deg.
-Kanban (3 cols) — frames at (cx-450,cy-220),(cx-100,cy-220),(cx+250,cy-220) each 300x500.
-Comparison (2 cols) — headers at (cx-200, cy-200) and (cx+100, cy-200); items spaced 170 below.
-
-Timeline — large frame, text headings for date labels, sticky notes for events, connectInSequence.
-Architecture diagram — rectangles for services → connectBatch with labels → frame for grouping layers.
-Infographic/Poster — createText H1 title at top → large frame container → shapes as decorative elements.
-Background sections — createShape(rectangle, large, color=mint, sentToBack=true) → sticky notes on top.
-Roadmap (Kanban) — 3 frames (Now/Soon/Later) → addToFrame items into each column → text headings above.
-
-=== LINE DRAWINGS & FREE-FORM PATHS ===
-To draw shapes, illustrations, or strokes (faces, arrows, decorative art):
-- Use createConnector with options.points containing 20-100 waypoints
-- ALWAYS set pointsRelative:true when using 5+ points:
-    points[0] = absolute {x,y} start
-    points[1..N] = relative {dx,dy} steps (~10-20px each for smooth curves)
-- Each createConnector = one continuous stroke; use multiple connectors for complex drawings
-- If no objects exist near the drawing area, create small (20x20) anchor shapes as endpoints
-- Step size guide: 10-15px for smooth curves, 20-30px for angular/geometric paths
-
-Example — ellipse at center (500,300), rx=80, ry=50 using 24 steps:
-  points[0]={x:580,y:300} then 23 relative steps tracing the ellipse
-  (each step: dx=cos(i*15°)*80-cos((i-1)*15°)*80, dy=sin(i*15°)*50-sin((i-1)*15°)*50)
-
-Example — a face outline (~36 pts), left eye (~12 pts), right eye (~12 pts), mouth (~10 pts):
-  4 separate createConnector calls, each with its own detailed points array
+=== LAYERS ===
+setLayer(id, sentToBack=true) = behind arrows | addToFrame(ids, frameId) = group children
 
 === COLORS ===
-Use ONLY these hex values for stickyNote/shape/frame backgrounds: ${agentTools.BOARD_PALETTE_HEX.join(' ')}
-Semantic: #d4e4bc=green(positive/strengths), #e8c5c5=rose(negative/weaknesses),
-          #c5d5e8=blue(neutral), #f5e6ab=yellow(highlight/opportunities),
-          #e8d4c5=peach(warning/threats), #d4c5e8=lavender, #c5e8d4=mint, #e0e0d0=grey.
-For text type: color is the text color, use #1a1a1a (dark) or any readable dark color.
+Backgrounds: ${agentTools.BOARD_PALETTE_HEX.join(' ')}
+green=positive  rose=negative  blue=neutral  yellow=highlight  peach=warning  mint/lavender/grey=accent
 
 === WORKFLOW ===
-1. PLAN: pick layout, compute all (x,y) coordinates, choose colors.
-2. CREATE: use createBatch for multiple objects (returns [{tempId, actualId}]).
-3. CONNECT: use connectBatch for multiple connections, connectInSequence for chains.
-4. LAYER/GROUP: use setLayer for background shapes, addToFrame to group into frames.
-5. ADJUST: moveObject or resizeObject only if needed.
-6. FINISH: one short confirmation message (no tool calls).
+Round 1: executePlan({objects, connections})
+  • ALL creation in one call. objects:[] is valid for connection-only commands.
+  • Each object MUST have: tempId, action, AND params:{x,y,...} — params is REQUIRED.
+    createStickyNote params: {text, x, y, color}
+    createShape params:      {type:"rectangle"|"circle"|"star", x, y, width, height, color}
+    createFrame params:      {title, x, y, width, height}
+    createText params:       {text, x, y, width, height, color}
+  • connections[]: fromId/toId = tempId or existing Firebase ID from board state above.
+  • Returns {idMap:{tempId→actualId}, connectionIds}
+Round 2 — REQUIRED when frames were created: call addToFrame(childIds, frameId) for EVERY
+  frame created. Use idMap values (actual IDs) not tempIds. Also use Round 2 for:
+  moveBatch / fitFrameToContents / setLayer / rotateObject / deleteObjects
+Round 3: one short text confirmation, no tool calls.
 
-=== CRITICAL RULES ===
-- DEFAULT OBJECT TYPE: use createStickyNote (not createShape) for any text-based content.
-  Use createText for headings, labels, titles (no background needed).
-  Only use createShape for geometric/diagram shapes (boxes in flowcharts, circles, etc.).
-- FRAMES: only create a frame when the user explicitly asks for a container or frame.
-  Never auto-wrap content in frames unless asked.
-- PLACEMENT: always place new objects within the visible viewport area shown above.
-- DELETE: use deleteObjects with the object IDs to remove things. When user says "delete
-  the selection" or "remove these", use the Selected Objects IDs listed above.
-- Do NOT call getBoardState unless you need data not shown in the board state above.
-- Do NOT create objects one at a time when createBatch is available.
-- createBatch returns actualIds — use those (not tempIds) for all connections.
-- connectInSequence(objectIds): connects A->B->C->D; prefer over multiple createConnector.
-- Target 2-3 tool-call rounds total.`;
+=== RULES ===
+• executePlan is the ONLY way to create objects — no other creation tools exist.
+• FRAMES: every frame MUST have addToFrame called in Round 2 with its child object IDs.
+  Failure to call addToFrame = children will not move with the frame.
+• Place ALL new objects inside the visible viewport area shown above.
+• EXACT COORDS: If user says "at position X, Y" or "at X, Y", use those exact numbers verbatim as x and y params. Do NOT adjust for viewport.
+• SHAPE DEFAULTS: rectangle = width:200, height:120. circle = width:120, height:120.
+• BATCH MOVE: ALWAYS use moveBatch([{id,x,y},...]) instead of multiple moveObject calls.
+  One moveBatch call handles all moves atomically — never loop moveObject one-by-one.
+• ARRANGE IN GRID: Sort objects by x then y. Compute cols=ceil(sqrt(N)), rows=ceil(N/cols).
+  cellW=obj.width+gap, cellH=obj.height+gap. Anchor at min(x), min(y) of selection.
+  Call moveBatch with all computed positions in one call.
+• SPACE EVENLY: Sort by axis (horizontal → by x, vertical → by y). Distribute positions
+  between first and last object position. Call moveBatch with all positions.
+• FIT FRAME: Use fitFrameToContents(frameId) when user asks to "resize frame to fit contents".
+• DELETE: deleteObjects(objectIds). "Delete selection" = use Selected Object IDs above.
+• Do NOT call getBoardState unless critical data is missing from the board state above.
+• Target 1 tool-call round. 2 maximum when frames or batch moves are involved.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -644,32 +676,63 @@ For text type: color is the text color, use #1a1a1a (dark) or any readable dark 
 // ---------------------------------------------------------------------------
 
 function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
+  const anchorEnum = ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'];
   return [
     {
       type: 'function',
       function: {
-        name: 'createBatch',
-        description: 'Create multiple objects in one call. Returns [{tempId, actualId}]. Use actualIds for connections.',
+        name: 'executePlan',
+        description: 'THE ONLY creation tool. Creates objects AND connections in one Firebase write. Use tempId strings ("s1","f1") in objects[]; reference same strings in connections[]. Returns {idMap:{tempId→actualId}, connectionIds}.',
         parameters: {
           type: 'object',
           properties: {
-            operations: {
+            objects: {
               type: 'array',
               items: {
                 type: 'object',
                 properties: {
-                  tempId: { type: 'string', description: 'Your reference label (e.g. "s1", "frame1")' },
+                  tempId: { type: 'string' },
                   action: { type: 'string', enum: ['createStickyNote', 'createShape', 'createFrame', 'createText'] },
                   params: {
                     type: 'object',
-                    description: 'createStickyNote: {text,x,y,color}. createShape: {type,x,y,width,height,color}. createFrame: {title,x,y,width,height}. createText: {text,x,y,width?,height?,color?} (color=text color, default #1a1a1a).',
+                    description: 'REQUIRED. Must include x and y. createStickyNote:{text,x,y,color} createShape:{type:"rectangle"|"circle"|"star",x,y,width,height,color} createFrame:{title,x,y,width,height} createText:{text,x,y,width,height,color}',
+                    properties: {
+                      x:      { type: 'number', description: 'X position (required)' },
+                      y:      { type: 'number', description: 'Y position (required)' },
+                      text:   { type: 'string' },
+                      title:  { type: 'string' },
+                      type:   { type: 'string', enum: ['rectangle', 'circle', 'star'] },
+                      width:  { type: 'number' },
+                      height: { type: 'number' },
+                      color:  { type: 'string' },
+                    },
+                    required: ['x', 'y'],
                   },
                 },
                 required: ['tempId', 'action', 'params'],
               },
             },
+            connections: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  fromId: { type: 'string', description: 'tempId or existing Firebase ID' },
+                  toId:   { type: 'string', description: 'tempId or existing Firebase ID' },
+                  options: {
+                    type: 'object',
+                    properties: {
+                      color:      { type: 'string' },
+                      fromAnchor: { type: 'string', enum: anchorEnum },
+                      toAnchor:   { type: 'string', enum: anchorEnum },
+                    },
+                  },
+                },
+                required: ['fromId', 'toId'],
+              },
+            },
           },
-          required: ['operations'],
+          required: ['objects', 'connections'],
         },
       },
     },
@@ -677,7 +740,7 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'connectBatch',
-        description: 'Create multiple connectors in one call. Reads objects once — much faster than multiple createConnector calls.',
+        description: 'Connect existing objects in bulk. One Firebase write. Do NOT use for objects just created in executePlan — put connections directly in executePlan.',
         parameters: {
           type: 'object',
           properties: {
@@ -687,13 +750,13 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
                 type: 'object',
                 properties: {
                   fromId: { type: 'string' },
-                  toId: { type: 'string' },
+                  toId:   { type: 'string' },
                   options: {
                     type: 'object',
                     properties: {
-                      fromAnchor: { type: 'string', enum: ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'] },
-                      toAnchor: { type: 'string', enum: ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right'] },
-                      color: { type: 'string' },
+                      fromAnchor: { type: 'string', enum: anchorEnum },
+                      toAnchor:   { type: 'string', enum: anchorEnum },
+                      color:      { type: 'string' },
                     },
                   },
                 },
@@ -708,26 +771,8 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
     {
       type: 'function',
       function: {
-        name: 'deleteObjects',
-        description: 'Delete one or more objects and all their connections. Use this when the user says "delete", "remove", or "clear". For "delete selection", pass the selected object IDs.',
-        parameters: {
-          type: 'object',
-          properties: {
-            objectIds: {
-              type: 'array',
-              items: { type: 'string' },
-              description: 'IDs of objects to delete',
-            },
-          },
-          required: ['objectIds'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
         name: 'connectInSequence',
-        description: 'Connect objects in a chain A->B->C->D. Pass ALL IDs in order. Prefer over multiple createConnector calls for sequences.',
+        description: 'Connect existing objects in a chain A→B→C→D. For connecting EXISTING objects only.',
         parameters: {
           type: 'object',
           properties: {
@@ -735,7 +780,7 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
             options: {
               type: 'object',
               properties: {
-                color: { type: 'string' },
+                color:     { type: 'string' },
                 direction: { type: 'string', enum: ['forward', 'bidirectional'] },
               },
             },
@@ -747,117 +792,85 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
     {
       type: 'function',
       function: {
-        name: 'createStickyNote',
-        description: 'Create a sticky note (160x120). Returns its ID.',
-        parameters: {
-          type: 'object',
-          properties: {
-            text: { type: 'string' },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            color: { type: 'string', description: 'Board palette hex or name (yellow, pink, blue, green, etc.)' },
-          },
-          required: ['text', 'x', 'y', 'color'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'createShape',
-        description: 'Create a shape. Returns its ID.',
-        parameters: {
-          type: 'object',
-          properties: {
-            type: { type: 'string', enum: ['rectangle', 'circle', 'star'] },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            width: { type: 'number' },
-            height: { type: 'number' },
-            color: { type: 'string' },
-          },
-          required: ['type', 'x', 'y', 'width', 'height', 'color'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'createFrame',
-        description: 'Create a labeled frame/container. Returns its ID.',
-        parameters: {
-          type: 'object',
-          properties: {
-            title: { type: 'string' },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            width: { type: 'number' },
-            height: { type: 'number' },
-          },
-          required: ['title', 'x', 'y', 'width', 'height'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'createConnector',
-        description: 'Connect two objects with a line/arrow. For line drawings and illustrations, pack options.points with 20-100 {x,y} waypoints to trace detailed paths (faces, shapes, curves). Returns connection ID.',
-        parameters: {
-          type: 'object',
-          properties: {
-            fromId: { type: 'string' },
-            toId: { type: 'string' },
-            options: {
-              type: 'object',
-              properties: {
-                fromAnchor: {
-                  type: 'string',
-                  enum: ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'star-0', 'star-1', 'star-2', 'star-3', 'star-4'],
-                },
-                toAnchor: {
-                  type: 'string',
-                  enum: ['top', 'bottom', 'left', 'right', 'top-left', 'top-right', 'bottom-left', 'bottom-right', 'star-0', 'star-1', 'star-2', 'star-3', 'star-4'],
-                },
-                color: { type: 'string' },
-                points: {
-                  type: 'array',
-                  items: {
-                    type: 'object',
-                    properties: { x: { type: 'number' }, y: { type: 'number' } },
-                    required: ['x', 'y'],
-                  },
-                  description: 'Waypoints tracing the path. For simple bends: 1-3 points. For line drawings/illustrations: 20-100 points spaced 10-20px apart. Always pair with pointsRelative:true when using many points.',
-                },
-                pointsRelative: {
-                  type: 'boolean',
-                  description: 'When true: points[0] is absolute {x,y}, all subsequent points are relative {dx,dy} offsets from the previous point. ALWAYS use this when providing 5+ waypoints — it keeps output compact and lets you think in small steps.',
-                },
-              },
-            },
-          },
-          required: ['fromId', 'toId'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'createMultiPointConnector',
-        description: 'Connect multiple objects with optional curved lines. Returns array of connection IDs.',
+        name: 'addToFrame',
+        description: 'Group objects into a frame as children (they move with the frame).',
         parameters: {
           type: 'object',
           properties: {
             objectIds: { type: 'array', items: { type: 'string' } },
-            options: {
-              type: 'object',
-              properties: {
-                color: { type: 'string' },
-                curved: { type: 'boolean' },
+            frameId:   { type: 'string' },
+          },
+          required: ['objectIds', 'frameId'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'setLayer',
+        description: 'sentToBack=true → behind arrows (background shapes). sentToBack=false → front.',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectId:   { type: 'string' },
+            sentToBack: { type: 'boolean' },
+          },
+          required: ['objectId', 'sentToBack'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'rotateObject',
+        description: 'Rotate an object (degrees 0–360).',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectId: { type: 'string' },
+            rotation: { type: 'number' },
+          },
+          required: ['objectId', 'rotation'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'moveBatch',
+        description: 'Move multiple existing objects in one atomic write. ALWAYS prefer this over multiple moveObject calls. Use for arrange/grid/space/align commands.',
+        parameters: {
+          type: 'object',
+          properties: {
+            moves: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  id: { type: 'string', description: 'Firebase object ID' },
+                  x:  { type: 'number' },
+                  y:  { type: 'number' },
+                },
+                required: ['id', 'x', 'y'],
               },
             },
           },
-          required: ['objectIds'],
+          required: ['moves'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'fitFrameToContents',
+        description: 'Resize a frame to tightly wrap all its children. Use for "resize frame to fit" commands.',
+        parameters: {
+          type: 'object',
+          properties: {
+            frameId: { type: 'string' },
+            padding: { type: 'number', description: 'Extra px on each side (default 40)' },
+          },
+          required: ['frameId'],
         },
       },
     },
@@ -865,7 +878,7 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'moveObject',
-        description: 'Move an object to (x, y).',
+        description: 'Move a single existing object to (x, y). For moving multiple objects use moveBatch.',
         parameters: {
           type: 'object',
           properties: {
@@ -881,12 +894,12 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'resizeObject',
-        description: 'Resize an object.',
+        description: 'Resize an existing object.',
         parameters: {
           type: 'object',
           properties: {
             objectId: { type: 'string' },
-            width: { type: 'number' },
+            width:  { type: 'number' },
             height: { type: 'number' },
           },
           required: ['objectId', 'width', 'height'],
@@ -897,12 +910,12 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'updateText',
-        description: 'Update text content of an object.',
+        description: 'Update text content of an existing object.',
         parameters: {
           type: 'object',
           properties: {
             objectId: { type: 'string' },
-            newText: { type: 'string' },
+            newText:  { type: 'string' },
           },
           required: ['objectId', 'newText'],
         },
@@ -912,12 +925,12 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'changeColor',
-        description: 'Change the color of an object.',
+        description: 'Change color of an existing object.',
         parameters: {
           type: 'object',
           properties: {
             objectId: { type: 'string' },
-            color: { type: 'string' },
+            color:    { type: 'string' },
           },
           required: ['objectId', 'color'],
         },
@@ -926,64 +939,14 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
     {
       type: 'function',
       function: {
-        name: 'createText',
-        description: 'Create a transparent text label/heading (no background). Great for titles, section labels, date stamps. H1=240×60, H2=200×50, H3=180×44. Returns its ID.',
+        name: 'deleteObjects',
+        description: 'Delete objects and their connections. "Delete selection" → use Selected Object IDs from board state.',
         parameters: {
           type: 'object',
           properties: {
-            text: { type: 'string' },
-            x: { type: 'number' },
-            y: { type: 'number' },
-            width: { type: 'number', description: 'Default 240' },
-            height: { type: 'number', description: 'Default 60' },
-            color: { type: 'string', description: 'Text color (dark). Default #1a1a1a' },
+            objectIds: { type: 'array', items: { type: 'string' } },
           },
-          required: ['text', 'x', 'y'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'addToFrame',
-        description: 'Group objects into a frame as children. Children move with the frame. Call after creating the frame and the objects.',
-        parameters: {
-          type: 'object',
-          properties: {
-            objectIds: { type: 'array', items: { type: 'string' }, description: 'IDs of objects to add to the frame' },
-            frameId: { type: 'string', description: 'ID of the target frame' },
-          },
-          required: ['objectIds', 'frameId'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'setLayer',
-        description: 'Control object depth. sentToBack=true puts object behind arrows/connections (good for background shapes). sentToBack=false brings it to front.',
-        parameters: {
-          type: 'object',
-          properties: {
-            objectId: { type: 'string' },
-            sentToBack: { type: 'boolean', description: 'true = behind connections, false = in front' },
-          },
-          required: ['objectId', 'sentToBack'],
-        },
-      },
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'rotateObject',
-        description: 'Rotate an object by setting its rotation in degrees (0–360).',
-        parameters: {
-          type: 'object',
-          properties: {
-            objectId: { type: 'string' },
-            rotation: { type: 'number', description: 'Rotation in degrees' },
-          },
-          required: ['objectId', 'rotation'],
+          required: ['objectIds'],
         },
       },
     },
@@ -991,7 +954,7 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
       type: 'function',
       function: {
         name: 'getBoardState',
-        description: 'Get full board state. Only call if you need data not in the board state above.',
+        description: 'Get full board state. Only if critical data is missing from board state above.',
         parameters: { type: 'object', properties: {} },
       },
     },

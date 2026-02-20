@@ -50,6 +50,8 @@ jest.mock('langsmith', () => ({
 // agentTools mock
 // ---------------------------------------------------------------------------
 jest.mock('./agentTools', () => ({
+  executePlan: jest.fn().mockResolvedValue({ idMap: { s1: 'actual-id-1' }, connectionIds: ['conn-id-1'] }),
+  // Individual creation functions still exist in agentTools but are not exposed as tools
   createStickyNote: jest.fn().mockResolvedValue('sticky-id'),
   createShape: jest.fn().mockResolvedValue('shape-id'),
   createFrame: jest.fn().mockResolvedValue('frame-id'),
@@ -72,6 +74,10 @@ jest.mock('./agentTools', () => ({
   getBoardState: jest.fn().mockResolvedValue({ objects: {}, connections: {} }),
   getBoardContext: jest.fn().mockResolvedValue({ objects: {}, connections: {} }),
   BOARD_PALETTE_HEX: ['#f5e6ab', '#d4e4bc', '#c5d5e8', '#e8c5c5', '#d4c5e8', '#c5e8d4', '#e8d4c5', '#e0e0d0'],
+  PALETTE: {
+    yellow: '#f5e6ab', green: '#d4e4bc', blue: '#c5d5e8', rose: '#e8c5c5',
+    lavender: '#d4c5e8', mint: '#c5e8d4', peach: '#e8d4c5', grey: '#e0e0d0',
+  },
 }));
 
 // ---------------------------------------------------------------------------
@@ -104,6 +110,24 @@ function makeToolCallResponse(
       },
     ],
     usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0, accepted_prediction_tokens: 0, rejected_prediction_tokens: 0 } },
+  } as unknown as OpenAI.ChatCompletion;
+}
+
+function makeJsonResponse(data: Record<string, unknown>): OpenAI.ChatCompletion {
+  return {
+    id: 'chatcmpl-json',
+    object: 'chat.completion',
+    created: 0,
+    model: 'gpt-4o-mini',
+    choices: [
+      {
+        index: 0,
+        message: { role: 'assistant', content: JSON.stringify(data), tool_calls: undefined, refusal: null },
+        finish_reason: 'stop',
+        logprobs: null,
+      },
+    ],
+    usage: { prompt_tokens: 5, completion_tokens: 20, total_tokens: 25, prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0, accepted_prediction_tokens: 0, rejected_prediction_tokens: 0 } },
   } as unknown as OpenAI.ChatCompletion;
 }
 
@@ -164,51 +188,29 @@ describe('runAgentCommand – board validation', () => {
 // Tool call execution
 // ---------------------------------------------------------------------------
 describe('runAgentCommand – tool execution', () => {
-  it('calls createStickyNote when AI returns that tool call', async () => {
+  it('calls executePlan when AI returns that tool call', async () => {
     mockCreate
       .mockResolvedValueOnce(
-        makeToolCallResponse([
-          { name: 'createStickyNote', args: { text: 'Hi', x: 0, y: 0, color: 'yellow' } },
-        ])
-      )
-      .mockResolvedValueOnce(makeStopResponse());
-
-    await runAgentCommand(BASE_PARAMS);
-    expect(agentTools.createStickyNote).toHaveBeenCalledWith(
-      'board1', 'Hi', 0, 0, 'yellow', 'user1'
-    );
-  });
-
-  it('calls createShape for shape tool calls', async () => {
-    mockCreate
-      .mockResolvedValueOnce(
-        makeToolCallResponse([
-          {
-            name: 'createShape',
-            args: { type: 'rectangle', x: 100, y: 100, width: 120, height: 80, color: 'blue' },
+        makeToolCallResponse([{
+          name: 'executePlan',
+          args: {
+            objects: [
+              { tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 0, y: 0, color: 'yellow' } },
+              { tempId: 's2', action: 'createStickyNote', params: { text: 'B', x: 300, y: 0, color: 'green' } },
+            ],
+            connections: [{ fromId: 's1', toId: 's2' }],
           },
-        ])
+        }])
       )
       .mockResolvedValueOnce(makeStopResponse());
 
     await runAgentCommand(BASE_PARAMS);
-    expect(agentTools.createShape).toHaveBeenCalledWith(
-      'board1', 'rectangle', 100, 100, 120, 80, 'blue', 'user1'
-    );
-  });
-
-  it('calls createText for text tool calls', async () => {
-    mockCreate
-      .mockResolvedValueOnce(
-        makeToolCallResponse([
-          { name: 'createText', args: { text: 'Heading', x: 100, y: 50, width: 240, height: 60, color: '#1a1a1a' } },
-        ])
-      )
-      .mockResolvedValueOnce(makeStopResponse());
-
-    await runAgentCommand(BASE_PARAMS);
-    expect(agentTools.createText).toHaveBeenCalledWith(
-      'board1', 'Heading', 100, 50, 240, 60, '#1a1a1a', 'user1'
+    expect(agentTools.executePlan).toHaveBeenCalledWith(
+      'board1',
+      expect.arrayContaining([expect.objectContaining({ tempId: 's1' })]),
+      expect.arrayContaining([expect.objectContaining({ fromId: 's1', toId: 's2' })]),
+      'user1',
+      expect.any(Map)
     );
   });
 
@@ -315,36 +317,41 @@ describe('runAgentCommand – agentic loop', () => {
   it('runs a second iteration when first response has tool calls', async () => {
     mockCreate
       .mockResolvedValueOnce(
-        makeToolCallResponse([
-          { name: 'createStickyNote', args: { text: 'A', x: 0, y: 0, color: 'yellow' } },
-        ])
+        makeToolCallResponse([{
+          name: 'executePlan',
+          args: {
+            objects: [{ tempId: 's1', action: 'createStickyNote', params: { text: 'A', x: 0, y: 0, color: 'yellow' } }],
+            connections: [],
+          },
+        }])
       )
-      // Second call: AI creates connection using returned ID
+      // Second call: post-processing (e.g. setLayer)
       .mockResolvedValueOnce(
         makeToolCallResponse([
-          { name: 'createConnector', args: { fromId: 'sticky-id', toId: 'other', options: {} } },
+          { name: 'setLayer', args: { objectId: 'actual-id-1', sentToBack: true } },
         ])
       )
       .mockResolvedValueOnce(makeStopResponse());
 
     await runAgentCommand(BASE_PARAMS);
-    // Both createStickyNote and createConnector should be called
-    expect(agentTools.createStickyNote).toHaveBeenCalledTimes(1);
-    expect(agentTools.createConnector).toHaveBeenCalledTimes(1);
-    expect(mockCreate).toHaveBeenCalledTimes(3);
+    expect(agentTools.executePlan).toHaveBeenCalledTimes(1);
+    expect(agentTools.setLayer).toHaveBeenCalledTimes(1);
+    // 2 iterations: iter-0 (executePlan) + iter-1 (setLayer); loop stops at maxIterations=2
+    expect(mockCreate).toHaveBeenCalledTimes(2);
   });
 
-  it('stops after max iterations even if AI keeps calling tools', async () => {
-    // Always return tool calls to force max iterations
+  it('stops after max iterations (2) even if AI keeps calling tools', async () => {
+    // Always return tool calls to force iteration limit
     mockCreate.mockResolvedValue(
-      makeToolCallResponse([
-        { name: 'createStickyNote', args: { text: 'X', x: 0, y: 0, color: 'yellow' } },
-      ])
+      makeToolCallResponse([{
+        name: 'executePlan',
+        args: { objects: [{ tempId: 's1', action: 'createStickyNote', params: { text: 'X', x: 0, y: 0, color: 'yellow' } }], connections: [] },
+      }])
     );
 
     const result = await runAgentCommand(BASE_PARAMS);
-    // Should stop after MAX_ITERATIONS, not loop infinitely
-    expect(mockCreate.mock.calls.length).toBeLessThanOrEqual(5);
+    // Simple command → maxIterations=2, so OpenAI called at most twice
+    expect(mockCreate.mock.calls.length).toBeLessThanOrEqual(2);
     expect(result.success).toBe(true);
   });
 
@@ -388,6 +395,74 @@ describe('runAgentCommand – retry on error', () => {
     const err = new Error('fail');
     mockCreate.mockRejectedValue(err);
     await expect(runAgentCommand(BASE_PARAMS)).rejects.toThrow('fail');
+    expect(agentTools.clearAgentStatus).toHaveBeenCalledWith('board1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Template engine (fast path)
+// ---------------------------------------------------------------------------
+describe('runAgentCommand – template engine', () => {
+  it('uses template engine for swot — executePlan called, agentic loop skipped', async () => {
+    mockCreate.mockResolvedValueOnce(makeJsonResponse({
+      strengths: ['S1', 'S2', 'S3'],
+      weaknesses: ['W1', 'W2'],
+      opportunities: ['O1', 'O2'],
+      threats: ['T1'],
+    }));
+
+    const result = await runAgentCommand({
+      ...BASE_PARAMS,
+      command: 'Create a SWOT analysis for my startup',
+    });
+
+    expect(result.success).toBe(true);
+    expect(agentTools.executePlan).toHaveBeenCalledTimes(1);
+    // extractContent is the only LLM call — no full agentic loop
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(agentTools.clearAgentStatus).toHaveBeenCalledWith('board1');
+  });
+
+  it('uses template engine for flowchart with arrow syntax — no LLM call needed', async () => {
+    const result = await runAgentCommand({
+      ...BASE_PARAMS,
+      command: 'Draw a flowchart: Start → Process → Decision → End',
+    });
+
+    expect(result.success).toBe(true);
+    expect(agentTools.executePlan).toHaveBeenCalledTimes(1);
+    // Arrow chain parsed directly — no LLM call
+    expect(mockCreate).not.toHaveBeenCalled();
+  });
+
+  it('falls back to agentic loop when template engine returns null (unsupported pattern)', async () => {
+    // orgchart is detected but has no template → falls through to agentic loop
+    mockCreate.mockResolvedValueOnce(makeStopResponse());
+
+    const result = await runAgentCommand({
+      ...BASE_PARAMS,
+      command: 'Create an org chart for my team',
+    });
+
+    expect(result.success).toBe(true);
+    // Agentic loop ran (at least one OpenAI call)
+    expect(mockCreate).toHaveBeenCalled();
+  });
+
+  it('clears agent status even after template engine succeeds', async () => {
+    mockCreate.mockResolvedValueOnce(makeJsonResponse({
+      columns: [
+        { name: 'To Do', items: ['Task 1'] },
+        { name: 'In Progress', items: ['Task 2'] },
+        { name: 'Done', items: ['Task 3'] },
+      ],
+    }));
+
+    await runAgentCommand({
+      ...BASE_PARAMS,
+      command: 'Create a kanban board for my project',
+    });
+
     expect(agentTools.clearAgentStatus).toHaveBeenCalledWith('board1');
   });
 });

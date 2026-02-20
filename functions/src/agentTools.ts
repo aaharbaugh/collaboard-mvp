@@ -50,6 +50,16 @@ export interface BatchConnectOp {
   options?: ConnectorOptions;
 }
 
+/**
+ * Connection entry for executePlan — fromId/toId may be a tempId from the
+ * objects[] array (e.g. "s1") or an existing Firebase object ID.
+ */
+export interface PlanConnection {
+  fromId: string;
+  toId: string;
+  options?: ConnectorOptions;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -291,6 +301,7 @@ export async function createFrame(
     width,
     height,
     color: '#12121a',
+    sentToBack: true,
     createdBy: userId,
     createdAt: Date.now(),
   });
@@ -340,8 +351,9 @@ export async function createBatch(
 
   for (const op of operations) {
     const id = randomUUID();
-    const x = Number(op.params['x'] ?? 0);
-    const y = Number(op.params['y'] ?? 0);
+    const p = op.params ?? {};
+    const x = Number(p['x'] ?? 0);
+    const y = Number(p['y'] ?? 0);
     let w = 160;
     let h = 120;
     let obj: Record<string, unknown>;
@@ -351,44 +363,45 @@ export async function createBatch(
         w = 160; h = 120;
         obj = {
           id, type: 'stickyNote',
-          text: String(op.params['text'] ?? ''),
+          text: String(p['text'] ?? ''),
           x, y, width: w, height: h,
-          color: mapColorNameToHex(String(op.params['color'] ?? 'yellow')),
+          color: mapColorNameToHex(String(p['color'] ?? 'yellow')),
           createdBy: userId, createdAt: Date.now(),
         };
         break;
       }
       case 'createShape': {
-        w = Number(op.params['width'] ?? 150);
-        h = Number(op.params['height'] ?? 100);
+        w = Number(p['width'] ?? 150);
+        h = Number(p['height'] ?? 100);
         obj = {
-          id, type: String(op.params['type'] ?? 'rectangle'),
+          id, type: String(p['type'] ?? 'rectangle'),
           x, y, width: w, height: h,
-          color: mapColorNameToHex(String(op.params['color'] ?? 'blue')),
+          color: mapColorNameToHex(String(p['color'] ?? 'blue')),
           createdBy: userId, createdAt: Date.now(),
         };
         break;
       }
       case 'createFrame': {
-        w = Number(op.params['width'] ?? 320);
-        h = Number(op.params['height'] ?? 220);
+        w = Number(p['width'] ?? 320);
+        h = Number(p['height'] ?? 220);
         obj = {
           id, type: 'frame',
-          text: String(op.params['title'] ?? ''),
+          text: String(p['title'] ?? ''),
           x, y, width: w, height: h,
           color: '#12121a',
+          sentToBack: true,
           createdBy: userId, createdAt: Date.now(),
         };
         break;
       }
       case 'createText': {
-        w = Number(op.params['width'] ?? 240);
-        h = Number(op.params['height'] ?? 60);
+        w = Number(p['width'] ?? 240);
+        h = Number(p['height'] ?? 60);
         obj = {
           id, type: 'text',
-          text: String(op.params['text'] ?? ''),
+          text: String(p['text'] ?? ''),
           x, y, width: w, height: h,
-          color: String(op.params['color'] ?? '#1a1a1a'),
+          color: String(p['color'] ?? '#1a1a1a'),
           createdBy: userId, createdAt: Date.now(),
         };
         break;
@@ -404,6 +417,146 @@ export async function createBatch(
 
   await admin.database().ref().update(updates);
   return results;
+}
+
+// ---------------------------------------------------------------------------
+// executePlan — create objects + connections in a single Firebase write
+// ---------------------------------------------------------------------------
+
+/**
+ * PRIMARY creation tool. Accepts both objects and connections in one call.
+ * Resolves tempIds locally (no extra Firebase read for newly-created objects),
+ * then writes everything — objects AND connections — in a single multi-path update.
+ *
+ * Returns { idMap: {tempId→actualId}, connectionIds }.
+ */
+export async function executePlan(
+  boardId: string,
+  objects: BatchCreateOp[],
+  connections: PlanConnection[],
+  userId: string,
+  cache?: ObjectCache
+): Promise<{ idMap: Record<string, string>; connectionIds: string[] }> {
+  const idMap: Record<string, string> = {};
+  const newGeometry: Record<string, BoardObjectLite> = {};
+  const allUpdates: Record<string, unknown> = {};
+  const now = Date.now();
+
+  // ── Phase 1: Build object data locally (no Firebase yet) ─────────────────
+  for (const op of objects) {
+    const id = randomUUID();
+    const p = op.params ?? {};
+    const x = Number(p['x'] ?? 0);
+    const y = Number(p['y'] ?? 0);
+    let w: number;
+    let h: number;
+    let obj: Record<string, unknown>;
+
+    switch (op.action) {
+      case 'createStickyNote': {
+        w = 160; h = 120;
+        obj = {
+          id, type: 'stickyNote', text: String(p['text'] ?? ''),
+          x, y, width: w, height: h,
+          color: mapColorNameToHex(String(p['color'] ?? 'yellow')),
+          createdBy: userId, createdAt: now,
+        };
+        break;
+      }
+      case 'createShape': {
+        w = Number(p['width'] ?? 150);
+        h = Number(p['height'] ?? 100);
+        obj = {
+          id, type: String(p['type'] ?? 'rectangle'),
+          x, y, width: w, height: h,
+          color: mapColorNameToHex(String(p['color'] ?? 'blue')),
+          createdBy: userId, createdAt: now,
+        };
+        break;
+      }
+      case 'createFrame': {
+        w = Number(p['width'] ?? 320);
+        h = Number(p['height'] ?? 220);
+        obj = {
+          id, type: 'frame', text: String(p['title'] ?? ''),
+          x, y, width: w, height: h, color: '#12121a',
+          sentToBack: true,
+          createdBy: userId, createdAt: now,
+        };
+        break;
+      }
+      case 'createText': {
+        w = Number(p['width'] ?? 240);
+        h = Number(p['height'] ?? 60);
+        obj = {
+          id, type: 'text', text: String(p['text'] ?? ''),
+          x, y, width: w, height: h,
+          color: String(p['color'] ?? '#1a1a1a'),
+          createdBy: userId, createdAt: now,
+        };
+        break;
+      }
+      default:
+        throw new Error(`Unknown executePlan object action: ${String(op.action)}`);
+    }
+
+    idMap[op.tempId] = id;
+    newGeometry[id] = { x, y, width: w, height: h };
+    cache?.set(id, { x, y, width: w, height: h });
+    allUpdates[`boards/${boardId}/objects/${id}`] = obj;
+  }
+
+  // ── Phase 2: Build connection data, resolving tempIds ────────────────────
+  const connectionIds: string[] = [];
+
+  if (connections.length > 0) {
+    // Resolve all IDs and check which ones lack geometry
+    const resolvedConns = connections.map((conn) => ({
+      fromActualId: idMap[conn.fromId] ?? conn.fromId,
+      toActualId:   idMap[conn.toId]   ?? conn.toId,
+      options: conn.options ?? {},
+    }));
+
+    const unknownIds = new Set<string>();
+    for (const { fromActualId, toActualId } of resolvedConns) {
+      if (!newGeometry[fromActualId] && !cache?.has(fromActualId)) unknownIds.add(fromActualId);
+      if (!newGeometry[toActualId]   && !cache?.has(toActualId))   unknownIds.add(toActualId);
+    }
+
+    // Fetch from Firebase only when connecting to pre-existing objects not in cache
+    let fetchedGeometry: Record<string, BoardObjectLite> = {};
+    if (unknownIds.size > 0) {
+      const snap = await admin.database().ref(`boards/${boardId}/objects`).once('value');
+      const raw: Record<string, unknown> = snap.val() ?? {};
+      for (const [id, obj] of Object.entries(raw)) {
+        if (obj && typeof obj === 'object') {
+          const o = obj as Record<string, unknown>;
+          fetchedGeometry[id] = {
+            x: Number(o['x'] ?? 0), y: Number(o['y'] ?? 0),
+            width: Number(o['width'] ?? 160), height: Number(o['height'] ?? 120),
+          };
+        }
+      }
+    }
+
+    for (const { fromActualId, toActualId, options } of resolvedConns) {
+      const fromObj = newGeometry[fromActualId] ?? cache?.get(fromActualId) ?? fetchedGeometry[fromActualId];
+      const toObj   = newGeometry[toActualId]   ?? cache?.get(toActualId)   ?? fetchedGeometry[toActualId];
+      if (!fromObj) throw new Error(`executePlan: object not found: ${fromActualId}`);
+      if (!toObj)   throw new Error(`executePlan: object not found: ${toActualId}`);
+
+      const { id, data } = _buildConnectionData(fromActualId, toActualId, fromObj, toObj, options, userId);
+      allUpdates[`boards/${boardId}/connections/${id}`] = data;
+      connectionIds.push(id);
+    }
+  }
+
+  // ── Phase 3: Single Firebase write — objects AND connections together ─────
+  if (Object.keys(allUpdates).length > 0) {
+    await admin.database().ref().update(allUpdates);
+  }
+
+  return { idMap, connectionIds };
 }
 
 // ---------------------------------------------------------------------------
@@ -651,6 +804,66 @@ export async function moveObject(
   y: number
 ): Promise<void> {
   await admin.database().ref(`boards/${boardId}/objects/${objectId}`).update({ x, y });
+}
+
+/** Move multiple objects in one atomic Firebase write. */
+export async function moveBatch(
+  boardId: string,
+  moves: Array<{ id: string; x: number; y: number }>
+): Promise<{ moved: number }> {
+  if (moves.length === 0) return { moved: 0 };
+  const updates: Record<string, unknown> = {};
+  for (const { id, x, y } of moves) {
+    updates[`boards/${boardId}/objects/${id}/x`] = x;
+    updates[`boards/${boardId}/objects/${id}/y`] = y;
+  }
+  await admin.database().ref().update(updates);
+  return { moved: moves.length };
+}
+
+/**
+ * Resize a frame to tightly fit its children (objects with frameId === frameId).
+ * Adds `padding` px on all sides; 50px extra at top for the frame title.
+ */
+export async function fitFrameToContents(
+  boardId: string,
+  frameId: string,
+  padding = 40
+): Promise<{ x: number; y: number; width: number; height: number }> {
+  const snap = await admin.database().ref(`boards/${boardId}/objects`).once('value');
+  const raw: Record<string, unknown> = snap.val() ?? {};
+
+  const children: BoardObjectLite[] = [];
+  for (const [id, obj] of Object.entries(raw)) {
+    if (id === frameId || !obj || typeof obj !== 'object') continue;
+    const o = obj as Record<string, unknown>;
+    if (String(o['frameId'] ?? '') === frameId) {
+      children.push({
+        x: Number(o['x'] ?? 0),
+        y: Number(o['y'] ?? 0),
+        width: Number(o['width'] ?? 160),
+        height: Number(o['height'] ?? 120),
+      });
+    }
+  }
+
+  if (children.length === 0) throw new Error(`Frame ${frameId} has no children to fit`);
+
+  const minX = Math.min(...children.map((c) => c.x));
+  const minY = Math.min(...children.map((c) => c.y));
+  const maxX = Math.max(...children.map((c) => c.x + c.width));
+  const maxY = Math.max(...children.map((c) => c.y + c.height));
+
+  const newX = minX - padding;
+  const newY = minY - padding - 50; // 50px for frame title bar
+  const newW = maxX - minX + padding * 2;
+  const newH = maxY - minY + padding * 2 + 50;
+
+  await admin.database().ref(`boards/${boardId}/objects/${frameId}`).update({
+    x: newX, y: newY, width: newW, height: newH,
+  });
+
+  return { x: newX, y: newY, width: newW, height: newH };
 }
 
 export async function resizeObject(
