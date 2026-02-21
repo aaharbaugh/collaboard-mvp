@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react';
 import { useUserBoards } from '../hooks/useUserBoards';
-import { createNewBoard, duplicateBoard } from '../utils/boardActions';
+import { createNewBoard, duplicateBoard, renameBoard, deleteBoard } from '../utils/boardActions';
 
 interface Props {
   userId: string;
@@ -14,8 +14,11 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
   const [newBoardStep, setNewBoardStep] = useState<'idle' | 'naming' | 'creating'>('idle');
   const [newBoardName, setNewBoardName] = useState('');
   const [duplicating, setDuplicating] = useState(false);
+  const [editingBoardId, setEditingBoardId] = useState<string | null>(null);
+  const [editingBoardName, setEditingBoardName] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
   const nameInputRef = useRef<HTMLInputElement>(null);
+  const renameInputRef = useRef<HTMLInputElement>(null);
   const { boards, loading, refresh } = useUserBoards(userId);
 
   const currentBoard = boards.find((b) => b.id === currentBoardId);
@@ -29,18 +32,20 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
         setOpen(false);
         setNewBoardStep('idle');
         setNewBoardName('');
+        setEditingBoardId(null);
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  // Focus name input when it appears
   useEffect(() => {
-    if (newBoardStep === 'naming') {
-      setTimeout(() => nameInputRef.current?.focus(), 0);
-    }
+    if (newBoardStep === 'naming') setTimeout(() => nameInputRef.current?.focus(), 0);
   }, [newBoardStep]);
+
+  useEffect(() => {
+    if (editingBoardId) setTimeout(() => renameInputRef.current?.select(), 0);
+  }, [editingBoardId]);
 
   const handleOpen = () => {
     const next = !open;
@@ -48,11 +53,13 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
     if (next) void refresh();
   };
 
-  const handleNewBoardClick = () => {
-    setNewBoardStep('naming');
-    setNewBoardName('');
+  const handleSwitch = (boardId: string) => {
+    if (boardId === currentBoardId) { setOpen(false); return; }
+    onBoardSwitch(boardId);
+    setOpen(false);
   };
 
+  // ── New board ──────────────────────────────────────────────────────────────
   const handleNewBoardCreate = async () => {
     const name = newBoardName.trim() || 'New Board';
     setNewBoardStep('creating');
@@ -67,11 +74,35 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
     }
   };
 
-  const handleNewBoardCancel = () => {
-    setNewBoardStep('idle');
-    setNewBoardName('');
+  // ── Rename ─────────────────────────────────────────────────────────────────
+  const startRename = (boardId: string, currentBoardName: string) => {
+    setEditingBoardId(boardId);
+    setEditingBoardName(currentBoardName);
   };
 
+  const commitRename = async () => {
+    if (!editingBoardId) return;
+    const trimmed = editingBoardName.trim();
+    if (trimmed) await renameBoard(editingBoardId, trimmed);
+    setEditingBoardId(null);
+    void refresh();
+  };
+
+  const cancelRename = () => setEditingBoardId(null);
+
+  // ── Delete ─────────────────────────────────────────────────────────────────
+  const handleDelete = async (boardId: string, boardName: string) => {
+    if (!window.confirm(`Delete "${boardName}"? This cannot be undone.`)) return;
+    // If deleting the active board, switch to another first
+    if (boardId === currentBoardId) {
+      const other = boards.find((b) => b.id !== boardId);
+      if (other) onBoardSwitch(other.id);
+    }
+    await deleteBoard(userId, boardId);
+    void refresh();
+  };
+
+  // ── Duplicate ──────────────────────────────────────────────────────────────
   const handleDuplicate = async () => {
     if (duplicating) return;
     setDuplicating(true);
@@ -85,6 +116,7 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
     }
   };
 
+  // ── Share ──────────────────────────────────────────────────────────────────
   const handleShareBoard = () => {
     const url = `${window.location.origin}${window.location.pathname}?board=${currentBoardId}`;
     navigator.clipboard.writeText(url).then(() => {
@@ -93,22 +125,9 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
     });
   };
 
-  const handleSwitch = (boardId: string) => {
-    if (boardId === currentBoardId) {
-      setOpen(false);
-      return;
-    }
-    onBoardSwitch(boardId);
-    setOpen(false);
-  };
-
   return (
     <div className="user-boards-panel" ref={panelRef}>
-      <button
-        className="user-boards-trigger"
-        onClick={handleOpen}
-        title="Board menu"
-      >
+      <button className="user-boards-trigger" onClick={handleOpen} title="Board menu">
         <span className="user-boards-name">{currentName}</span>
         <span className="user-boards-chevron">{open ? '▴' : '▾'}</span>
       </button>
@@ -125,15 +144,50 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
             <ul className="user-boards-list">
               {boards.map((board) => (
                 <li key={board.id}>
-                  <button
-                    className={`user-boards-item${board.id === currentBoardId ? ' active' : ''}`}
-                    onClick={() => handleSwitch(board.id)}
-                  >
-                    <span className="user-boards-item-check">
-                      {board.id === currentBoardId ? '●' : '○'}
-                    </span>
-                    <span className="user-boards-item-name">{board.name}</span>
-                  </button>
+                  {editingBoardId === board.id ? (
+                    <div className="user-boards-item-row">
+                      <input
+                        ref={renameInputRef}
+                        className="user-boards-rename-input"
+                        value={editingBoardName}
+                        onChange={(e) => setEditingBoardName(e.target.value)}
+                        maxLength={60}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void commitRename();
+                          if (e.key === 'Escape') cancelRename();
+                        }}
+                        onBlur={() => void commitRename()}
+                      />
+                    </div>
+                  ) : (
+                    <div className={`user-boards-item-row${board.id === currentBoardId ? ' active' : ''}`}>
+                      <button
+                        className="user-boards-item"
+                        onClick={() => handleSwitch(board.id)}
+                      >
+                        <span className="user-boards-item-check">
+                          {board.id === currentBoardId ? '●' : '○'}
+                        </span>
+                        <span className="user-boards-item-name">{board.name}</span>
+                      </button>
+                      <div className="user-boards-item-actions">
+                        <button
+                          className="user-boards-icon-btn"
+                          title="Rename"
+                          onClick={(e) => { e.stopPropagation(); startRename(board.id, board.name); }}
+                        >
+                          ✎
+                        </button>
+                        <button
+                          className="user-boards-icon-btn danger"
+                          title="Delete"
+                          onClick={(e) => { e.stopPropagation(); void handleDelete(board.id, board.name); }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -143,11 +197,10 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
 
           <div className="user-boards-actions">
             {newBoardStep === 'idle' && (
-              <button className="user-boards-action-btn" onClick={handleNewBoardClick}>
+              <button className="user-boards-action-btn" onClick={() => setNewBoardStep('naming')}>
                 [+] New Board
               </button>
             )}
-
             {newBoardStep === 'naming' && (
               <div className="user-boards-name-form">
                 <input
@@ -159,26 +212,18 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
                   maxLength={60}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') void handleNewBoardCreate();
-                    if (e.key === 'Escape') handleNewBoardCancel();
+                    if (e.key === 'Escape') { setNewBoardStep('idle'); setNewBoardName(''); }
                   }}
                 />
                 <div className="user-boards-name-btns">
-                  <button className="user-boards-action-btn create" onClick={() => void handleNewBoardCreate()}>
-                    Create
-                  </button>
-                  <button className="user-boards-action-btn" onClick={handleNewBoardCancel}>
-                    Cancel
-                  </button>
+                  <button className="user-boards-action-btn create" onClick={() => void handleNewBoardCreate()}>Create</button>
+                  <button className="user-boards-action-btn" onClick={() => { setNewBoardStep('idle'); setNewBoardName(''); }}>Cancel</button>
                 </div>
               </div>
             )}
-
             {newBoardStep === 'creating' && (
-              <button className="user-boards-action-btn" disabled>
-                [ creating... ]
-              </button>
+              <button className="user-boards-action-btn" disabled>[ creating... ]</button>
             )}
-
             <button
               className="user-boards-action-btn"
               onClick={() => void handleDuplicate()}
@@ -186,10 +231,7 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
             >
               {duplicating ? '[ duplicating... ]' : '[⧉] Duplicate Board'}
             </button>
-            <button
-              className="user-boards-action-btn share"
-              onClick={handleShareBoard}
-            >
+            <button className="user-boards-action-btn share" onClick={handleShareBoard}>
               {copied ? '[ copied! ]' : '[⎘] Share Board'}
             </button>
           </div>

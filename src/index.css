@@ -248,9 +248,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.35rem;
-  padding: 0.25rem 0.35rem;
-  margin-bottom: 0.15rem;
+  gap: 0.5rem;
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.2rem;
   background: var(--bg-card);
   border: 1px solid var(--border-light);
   border-radius: 2px;
@@ -402,11 +402,23 @@ body {
   overflow-y: auto;
 }
 
+.user-boards-item-row {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.user-boards-item-row:hover .user-boards-item-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .user-boards-item {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  width: 100%;
+  flex: 1;
+  min-width: 0;
   background: transparent;
   border: none;
   color: var(--text-primary);
@@ -418,14 +430,69 @@ body {
   transition: background 0.1s;
 }
 
-.user-boards-item:hover {
+.user-boards-item-row:hover .user-boards-item,
+.user-boards-item-row.active .user-boards-item {
   background: rgba(74, 124, 89, 0.1);
+}
+
+.user-boards-item-row:hover .user-boards-item {
   color: var(--accent-green);
 }
 
-.user-boards-item.active {
+.user-boards-item-row.active .user-boards-item {
   color: var(--accent-green);
   font-weight: 600;
+}
+
+.user-boards-item-actions {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  padding-right: 0.4rem;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.1s;
+  flex-shrink: 0;
+}
+
+.user-boards-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 2px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.1s, background 0.1s;
+}
+
+.user-boards-icon-btn:hover {
+  color: var(--accent-green);
+  background: rgba(74, 124, 89, 0.15);
+}
+
+.user-boards-icon-btn.danger:hover {
+  color: var(--accent-amber);
+  background: rgba(139, 105, 20, 0.12);
+}
+
+.user-boards-rename-input {
+  flex: 1;
+  margin: 2px 0.4rem 2px 0.75rem;
+  background: var(--bg-parchment);
+  border: 1px solid var(--accent-green);
+  border-radius: 2px;
+  color: var(--text-primary);
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.8rem;
+  padding: 0.2rem 0.4rem;
+  outline: none;
+  width: calc(100% - 1.15rem);
 }
 
 .user-boards-item-check {
@@ -638,11 +705,6 @@ body {
 
 /* Selection tools (color picker + order buttons) */
 .selection-tools {
-  position: absolute;
-  bottom: 60px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 10;
   display: flex;
   align-items: center;
   gap: 0.5rem;
@@ -679,10 +741,21 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 
+.agent-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 0.1rem;
+}
+
+.agent-header-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
 .agent-close-btn {
-  position: absolute;
-  top: 0.4rem;
-  right: 0.4rem;
   background: transparent;
   border: 1px solid var(--border-light);
   color: var(--text-muted);

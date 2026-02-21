@@ -3,8 +3,8 @@ import { subscribeWithSelector } from 'zustand/middleware';
 
 export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'text' | 'frame';
 
-/** Order for the Shape [5] cycle: Star -> Circle -> Rectangle -> Star */
-export const SHAPE_CYCLE: ToolMode[] = ['star', 'circle', 'rectangle'];
+/** Order for the Shape [3] cycle: Circle -> Rectangle -> Star */
+export const SHAPE_CYCLE: ToolMode[] = ['circle', 'rectangle', 'star'];
 
 /** Order for the Pointer [1] cycle: Select <-> Move */
 export const POINTER_CYCLE: ToolMode[] = ['select', 'move'];

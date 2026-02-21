@@ -9,7 +9,7 @@ const TOOLS: { mode: ToolMode; label: string; hotkey: string }[] = [
 
 const SHAPE_LABELS: Record<string, string> = { star: 'Star', circle: 'Circle', rectangle: 'Rect' };
 
-const SHAPE_PREVIEW_SIZE = 20;
+const SHAPE_PREVIEW_SIZE = 28;
 const SHAPE_STROKE = 1.25;
 
 /** 5-point star matching board Star (innerRadius = 0.4 * outerRadius), viewBox 0 0 24 24, center 12,12 */
@@ -24,14 +24,14 @@ function ShapePreviewIcons({ activeShape, isActive }: { activeShape: ToolMode; i
 
   return (
     <div className={`toolbar-shape-preview${isActive ? '' : ' toolbar-shape-preview--dim'}`} aria-hidden>
-      <svg width={SHAPE_PREVIEW_SIZE} height={SHAPE_PREVIEW_SIZE} viewBox="0 0 24 24" fill="none" stroke={isStar ? green : stroke} strokeWidth={SHAPE_STROKE}>
-        {isStar ? <path fill={green} stroke={green} d={STAR_PATH} /> : <path d={STAR_PATH} />}
-      </svg>
       <svg width={SHAPE_PREVIEW_SIZE} height={SHAPE_PREVIEW_SIZE} viewBox="0 0 24 24" fill="none" stroke={isCircle ? green : stroke} strokeWidth={SHAPE_STROKE}>
         {isCircle ? <circle cx="12" cy="12" r="9" fill={green} stroke={green} /> : <circle cx="12" cy="12" r="9" />}
       </svg>
       <svg width={SHAPE_PREVIEW_SIZE} height={SHAPE_PREVIEW_SIZE} viewBox="0 0 24 24" fill="none" stroke={isRect ? green : stroke} strokeWidth={SHAPE_STROKE}>
         {isRect ? <rect x="4" y="5" width="16" height="14" fill={green} stroke={green} /> : <rect x="4" y="5" width="16" height="14" />}
+      </svg>
+      <svg width={SHAPE_PREVIEW_SIZE} height={SHAPE_PREVIEW_SIZE} viewBox="0 0 24 24" fill="none" stroke={isStar ? green : stroke} strokeWidth={SHAPE_STROKE}>
+        {isStar ? <path fill={green} stroke={green} d={STAR_PATH} /> : <path d={STAR_PATH} />}
       </svg>
     </div>
   );
@@ -116,7 +116,7 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
         </button>
       ))}
       <div className="toolbar-shape-group">
-        <ShapePreviewIcons activeShape={currentShape} isActive={isShapeActive} />
+        {isShapeActive && <ShapePreviewIcons activeShape={currentShape} isActive={isShapeActive} />}
         <button
           key="shape"
           className={`toolbar-btn ${isShapeActive ? 'active' : ''}`}

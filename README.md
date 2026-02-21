@@ -4,138 +4,206 @@ A real-time collaborative whiteboard with an AI agent. Built with React, Konva, 
 
 ---
 
-## Major functionality
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Frontend** | React 19, TypeScript, Vite 8 |
+| **Canvas** | Konva.js / react-konva |
+| **State** | Zustand 5 |
+| **Auth** | Firebase Authentication (Google + Anonymous) |
+| **Database** | Firebase Realtime Database |
+| **Hosting** | Firebase Hosting |
+| **Backend** | Firebase Cloud Functions v7 (Node 22, TypeScript) |
+| **AI (planning)** | OpenAI `gpt-4o` (or Groq `llama-3.3-70b-versatile` if `GROQ_API_KEY` is set) |
+| **Observability** | LangSmith (optional) |
+| **Testing** | Vitest (frontend), Jest + ts-jest (functions) |
+
+---
+
+## Features
 
 ### Authentication
+- **AuthGate** wraps the app — users must sign in before accessing any board.
+- **Sign-in options:** Google OAuth or Anonymous (Firebase Auth).
+- Loading state shown until auth resolves; unauthenticated users see a sign-in card.
 
-- **AuthGate** wraps the app: users must sign in before they see the board.
-- **Sign-in options:** Google or Anonymous (Firebase Auth).
-- Loading state is shown until auth is resolved; unauthenticated users see a sign-in card.
+### Board Management
+- Users can own and switch between **multiple boards**.
+- **UserBoardsPanel** (top-left) supports: create new board (with a name), rename, duplicate, and delete boards.
+- Share a board by copying its URL; collaborators join via the URL.
 
-### Board model
+### Board Data Model (Firebase Realtime Database)
+Each board at `boards/${boardId}` has:
+- **`metadata`** — owner, name, createdAt
+- **`collaborators`** — map of userId → true
+- **`objects`** — map of objectId → BoardObject
+- **`connections`** — map of connectionId → Connection
+- **`cursors`** — map of userId → Cursor
 
-- **One board per user (MVP):** On load, the app resolves a single board ID (e.g. shared demo board or a personal board created for the user). All collaboration happens on that board.
-- **Firebase Realtime Database** stores, per board:
-  - **`metadata`** — owner, name, createdAt.
-  - **`collaborators`** — map of userId → true.
-  - **`objects`** — map of object id → BoardObject.
-  - **`connections`** — map of connection id → Connection.
-  - **`cursors`** — map of userId → Cursor (position, name, color, lastUpdate).
+**Object types:** `stickyNote`, `rectangle`, `circle`, `star`, `text`, `frame`, `image`
 
-**Object types:** stickyNote, rectangle, circle, star, text, frame, image. Each has id, type, x, y, width, height, optional color/text/rotation/frameId/sentToBack, createdBy, createdAt, and optional selection fields (selectedBy, selectedByName).
+Each object has: id, type, x, y, width, height, optional color/text/rotation/imageData/headingLevel/frameId/sentToBack, createdBy, createdAt, and optional selection fields (selectedBy, selectedByName).
 
-**Connections:** fromId, toId, fromAnchor, toAnchor, optional points (waypoints as flat [x,y,...]), color, createdBy, createdAt. Rendered as arrows; waypoints allow bent or polyline paths.
+**Connections:** fromId, toId, fromAnchor, toAnchor, optional waypoints (flat `[x1,y1,x2,y2,...]`), color, createdBy, createdAt. Rendered as arrows with optional bent/polyline paths.
 
-### Canvas and tools
-
+### Canvas & Tools
 - **React-Konva** canvas: pannable and zoomable (viewport: x, y, scale). Origin top-left; x right, y down.
-- **Toolbar** (and hotkeys):
-  - **1** — Pointer: cycle Select ↔ Move (pan).
-  - **2** — Sticky note.
-  - **4** — Text.
-  - **5** — Cycle shape: Star → Circle → Rectangle (and Frame via toolbar).
-  - **6** — Toggle AI panel.
-- **Select mode:** Click object to select; drag on empty space for multi-select. Selected objects show resize/rotation handles; ColorPicker and order buttons (send to back / bring to front) appear. Delete/Backspace removes selected objects or the selected connection. Copy/paste (Ctrl+C / Ctrl+V) duplicates objects.
-- **Drawing:** In sticky/shape/text/frame mode, click on the canvas to create an object. Connector tool: click an object’s anchor to start, then click waypoints (optional) and another object’s anchor to finish. Double-click sticky or text to edit content in an overlay.
-- **Connections:** Arrows between objects; optional waypoints for bent lines. When a connection is selected, waypoints can be dragged or double-click can add a new waypoint.
 
-### Real-time sync
+| Hotkey | Tool |
+|--------|------|
+| `1` | Pointer — cycle Select ↔ Move (pan) |
+| `2` | Sticky note |
+| `3` | Shape — cycle Star → Circle → Rectangle |
+| `4` | Text |
+| `5` | Frame |
+| `6` | Toggle AI panel |
 
-- **useBoardSync(boardId):** Subscribes to `boards/${boardId}/objects` and `.../connections` with Firebase `onValue`. Local state (objects, connections) is always the live DB state. Create/update/delete object and connection helpers write directly to the DB.
-- **useCursorSync(boardId, userId, userName):** Subscribes to `boards/${boardId}/cursors`. Updates the current user’s cursor (throttled) and cleans stale cursors. Other users’ cursors are shown in **CursorOverlay**; **PresenceList** lists who’s on the board.
-- **Selection and viewport** are local only (Zustand store), not synced to Firebase.
+- **Select mode:** Click to select; drag empty space for multi-select. Selected objects show resize/rotation handles, a ColorPicker, and order buttons (send to back / bring to front). Delete/Backspace removes selected objects or a selected connection. Ctrl+C / Ctrl+V copies and pastes.
+- **Drawing:** Click on the canvas to place an object in the current tool mode.
+- **Connector tool:** Click an anchor on one object, optionally click waypoints, then click an anchor on another object to create a connection.
+- **Text editing:** Double-click a sticky note or text element to edit inline.
+- **Frames:** Group objects into frames; children move and resize with the frame.
 
-### AI agent
+### Real-time Collaboration
+- **useBoardSync:** Subscribes to `boards/${boardId}/objects` and `.../connections` via Firebase `onValue`. Field-level diffing limits re-renders to objects that actually changed.
+- **useCursorSync:** Subscribes to `.../cursors`; updates the current user's cursor (throttled) and cleans stale cursors. Other users' cursors appear as named overlays via **CursorOverlay**. **PresenceList** shows who is currently on the board.
+- Selection and viewport state are local only (Zustand), never synced to Firebase.
 
-- **AgentPanel** (Ask AI): User types a natural-language command (e.g. “Create a SWOT analysis”, “Draw a flowchart”). The panel sends the command plus optional **context**: current **selection** (selectedIds) and **viewport** (x, y, scale).
-- **Backend:** HTTP endpoint `/api/agent` is implemented by Firebase Function **executeAgentCommand** (see `functions/src/index.ts`). It receives `AgentCommandRequest`: boardId, command, userId, userName, optional selectedIds, optional viewport.
-- **runAgentCommand** (in `functions/src/agent.ts`):
-  1. Validates board exists.
-  2. Loads **board context** via `getBoardContext(boardId, { selectedIds, viewport })`: either the selection + related connections, or objects in the visible viewport, or the full board. Context is **compressed** (only id, type, x, y, width, height, text, color for objects; id, fromId, toId, anchors, color, points for connections).
-  3. Builds a short **system prompt** with that context, coordinate rules, and allowed colors (board palette). Sends the user command as the user message.
-  4. Runs an **agent loop** (up to 5 iterations): calls OpenAI `gpt-4o-mini` with tools; for each response that contains tool_calls, runs the tools (createStickyNote, createShape, createFrame, createConnector, createMultiPointConnector, connectInSequence, moveObject, resizeObject, updateText, changeColor, getBoardState) via **dispatchTool** and appends results to the conversation until the model stops with a final message.
-  5. **Langfuse:** Creates a trace, sets trace input (boardId, command, context summary) and output (success/message/totalToolCalls or error), and flushes before returning.
-- **agentTools** (`functions/src/agentTools.ts`): All tool implementations read/write Firebase (same `boards/${boardId}/objects` and `.../connections`). Colors are constrained to the board palette. Connectors support optional waypoints and optional relative waypoints (first point absolute, rest as dx/dy).
-
-### Deployment and dev
-
-- **Hosting:** Firebase Hosting serves the built SPA from `dist`. Rewrite: `/api/agent` → Cloud Function `executeAgentCommand` (us-central1). All other routes → `index.html`.
-- **Local dev:** `npm run dev` runs Vite (e.g. port 5174). Vite proxy forwards `/api/agent` to the Firebase Functions emulator at `http://127.0.0.1:5001/<projectId>/us-central1/executeAgentCommand`. Run `firebase emulators:start --only functions` in another terminal so the agent works locally.
-
----
-
-## Features summary
-
-| Area | Features |
-|------|----------|
-| **Tools** | Select/Move (1), Sticky (2), Text (4), Shapes + Frame (5), AI panel (6). Hotkeys and toolbar. |
-| **Objects** | Sticky notes, rectangle/circle/star, text, frame, image. Move, resize, rotate, color, send to back/front. |
-| **Connections** | Arrows between objects with optional waypoints; select, drag waypoints, delete. |
-| **Selection** | Single/multi-select; copy/paste; delete. |
-| **Collaboration** | Real-time board and cursor sync; presence list; auth required (Google or anonymous). |
-| **Viewport** | Pan and zoom; grid background. |
-| **AI** | Natural-language commands; context = selection or viewport or full board; tools create/edit board content; Langfuse tracing. |
+### AI Agent
+- **AgentPanel** (hotkey `6`): Type a natural-language command, e.g. `"Create a SWOT analysis"` or `"Draw a flowchart: Start → Process → Decision → End"`.
+- Context passed to the agent: current **selection** (selectedIds) and/or **viewport** (x, y, scale).
+- **Backend — `executeAgentCommand`** (Firebase Function, `/api/agent`):
+  1. Validates the board exists.
+  2. Loads **board context** via `getBoardContext`: selected objects, objects in the visible viewport, or the full board. Context is compressed (only the fields needed for layout decisions).
+  3. Builds a system prompt with coordinate rules and the board's color palette.
+  4. Runs an **agentic loop** (up to 5 iterations) calling OpenAI (or Groq) with tools. Tool calls are dispatched via `agentTools.ts` and results appended until the model finishes.
+  5. **Template engine** (`templateEngine.ts`): For common diagram types (SWOT, flowchart, mind map, etc.) the agent can invoke structured templates that build layouts deterministically.
+  6. **LangSmith** tracing (optional): traces each command, including the board context and total tool calls.
+- **Agent tools:** `createStickyNote`, `createShape`, `createFrame`, `createConnector`, `createMultiPointConnector`, `connectInSequence`, `moveObject`, `resizeObject`, `updateText`, `changeColor`, `getBoardState`.
 
 ---
 
-## Tech stack
+## Project Structure
 
-- **Frontend:** React 19, TypeScript, Vite, react-konva, Zustand.
-- **Backend:** Firebase (Auth, Realtime Database, Hosting, Cloud Functions).
-- **Agent:** OpenAI API (gpt-4o-mini), Langfuse for observability.
+```
+collaboard-mvp/
+├── src/
+│   ├── App.tsx                     # AuthGate → BoardView
+│   ├── features/
+│   │   ├── auth/                   # AuthGate, useAuth
+│   │   ├── board/                  # BoardView, BoardCanvas, Toolbar
+│   │   │   ├── components/         # BoardObject, ConnectionLine, UserBoardsPanel, ...
+│   │   │   │   └── objects/        # StickyNote, Rectangle, Circle, Star, Frame, Text, Image
+│   │   │   ├── hooks/              # useBoardId, useUserBoards
+│   │   │   └── utils/              # boardActions, boardCache, anchorPoint
+│   │   ├── agent/                  # AgentPanel, useAgentCommand
+│   │   └── sync/                   # useBoardSync, useCursorSync
+│   ├── lib/                        # firebase.ts, store.ts (Zustand), constants.ts
+│   ├── types/                      # board.ts (BoardObject, Connection, Cursor, Board)
+│   └── components/                 # CursorOverlay, PresenceList, TextEditingOverlay
+├── functions/
+│   └── src/
+│       ├── index.ts                # Exports executeAgentCommand HTTP function
+│       ├── agent.ts                # Agent loop, system prompt, tool definitions
+│       ├── agentTools.ts           # Tool implementations (Firebase reads/writes)
+│       └── templateEngine.ts       # Structured diagram templates (SWOT, flowchart, etc.)
+├── firebase.json                   # Hosting rewrites, emulators config
+├── database.rules.json             # Realtime Database security rules
+└── vite.config.ts                  # Dev server + proxy for /api/agent
+```
 
 ---
 
 ## Commands
 
+### Frontend (root)
+
 | Command | Description |
 |---------|-------------|
 | `npm run dev` | Start Vite dev server |
-| `npm run build` | Type-check and build for production |
+| `npm run build` | Type-check + production build |
 | `npm run preview` | Preview production build locally |
 | `npm run lint` | Run ESLint |
-| `npm run test` | Run tests (watch) |
-| `npm run test:run` | Run tests once |
-| `npm run deploy` | Build and deploy to Firebase |
+| `npm run test` | Run Vitest in watch mode |
+| `npm run test:run` | Run Vitest once |
+| `npm run deploy` | Build and deploy hosting + functions |
 
-**Functions (in `functions/`):**
+### Functions (`functions/`)
 
 | Command | Description |
 |---------|-------------|
 | `npm run build` | Compile TypeScript |
-| `npm test` | Run Jest tests for agent and agentTools |
+| `npm run build:watch` | Compile in watch mode |
+| `npm test` | Run Jest tests |
+| `npm run serve` | Build + start Functions emulator |
+| `npm run deploy` | Deploy functions only |
 
 ---
 
 ## Setup
 
-1. Clone and install: `npm install` (root) and `npm install` in `functions/` if you will run or deploy functions.
-2. **Environment:** Copy or create `.env.local` with Firebase config (e.g. `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_API_KEY`, etc.). For the agent, set `OPENAI_API_KEY` and optional Langfuse keys in `functions/.env` or Firebase config.
-3. **Run locally:** `npm run dev`. For AI commands, also run `firebase emulators:start --only functions`.
-4. **Deploy:** `npm run deploy` builds the app and deploys hosting + functions. Ensure Firebase project and Realtime Database rules are configured (e.g. `database.rules.json` allows read/write for authenticated users on their boards).
+### 1. Install dependencies
+
+```bash
+npm install
+cd functions && npm install
+```
+
+### 2. Configure environment
+
+**Frontend** — create `.env.local` in the project root:
+
+```env
+VITE_FIREBASE_API_KEY=...
+VITE_FIREBASE_AUTH_DOMAIN=...
+VITE_FIREBASE_PROJECT_ID=...
+VITE_FIREBASE_DATABASE_URL=...
+VITE_FIREBASE_STORAGE_BUCKET=...
+VITE_FIREBASE_MESSAGING_SENDER_ID=...
+VITE_FIREBASE_APP_ID=...
+```
+
+**Functions** — create `functions/.env`:
+
+```env
+OPENAI_API_KEY=...
+
+# Optional: use Groq (llama-3.3-70b-versatile) for faster/cheaper content extraction
+GROQ_API_KEY=...
+
+# Optional: LangSmith tracing
+LANGSMITH_API_KEY=...
+```
+
+### 3. Run locally
+
+```bash
+# Terminal 1: start Vite dev server
+npm run dev
+
+# Terminal 2: start Firebase Functions emulator (needed for AI commands)
+firebase emulators:start --only functions
+```
+
+Vite proxies `/api/agent` to the local Functions emulator automatically.
+
+### 4. Deploy
+
+```bash
+npm run deploy
+```
+
+This builds the frontend and deploys both Firebase Hosting and Cloud Functions. Ensure your Firebase project has Realtime Database enabled and `database.rules.json` is configured for your auth requirements.
 
 ---
 
-## Project structure (high level)
+## Emulator ports (default)
 
-```
-collaboard-mvp/
-├── src/
-│   ├── App.tsx                 # AuthGate → BoardView
-│   ├── features/
-│   │   ├── auth/               # AuthGate, useAuth
-│   │   ├── board/              # BoardView, BoardCanvas, Toolbar, object/connection components
-│   │   ├── agent/              # AgentPanel, useAgentCommand
-│   │   └── sync/               # useBoardSync, useCursorSync
-│   ├── lib/                    # firebase, store (Zustand), constants
-│   ├── types/                  # board.ts (BoardObject, Connection, Cursor, etc.)
-│   └── components/            # CursorOverlay, PresenceList, TextEditingOverlay
-├── functions/
-│   └── src/
-│       ├── index.ts            # HTTP function executeAgentCommand
-│       ├── agent.ts            # runAgentCommand, system prompt, tool definitions, dispatch
-│       └── agentTools.ts       # Board context, create/update tools, Firebase writes
-├── firebase.json               # Hosting rewrites, emulators
-├── database.rules.json         # Realtime Database security
-└── vite.config.ts              # Dev proxy for /api/agent
-```
+| Service | Port |
+|---------|------|
+| Hosting | 5000 |
+| Functions | 5001 |
+| Auth | 9099 |
+| Realtime Database | 9000 |
+| Emulator UI | 4000 |

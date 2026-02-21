@@ -243,33 +243,33 @@ export function BoardView() {
             viewport={viewport}
             excludeUserId={user.uid}
           />
-          {selectedIds.length > 0 && (
-            <div className="selection-tools">
-              <ColorPicker
-                currentColor={selectedObject?.color}
-                onColorChange={handleColorChange}
-              />
-              <div className="object-order-buttons">
-                <button
-                  type="button"
-                  className="toolbar-btn"
-                  title="Send behind arrows"
-                  onClick={() => selectedIds.forEach((id) => updateObject(id, { sentToBack: true }))}
-                >
-                  Send to back
-                </button>
-                <button
-                  type="button"
-                  className="toolbar-btn"
-                  title="Bring in front of arrows"
-                  onClick={() => selectedIds.forEach((id) => updateObject(id, { sentToBack: false }))}
-                >
-                  Bring to front
-                </button>
-              </div>
-            </div>
-          )}
           <div className="toolbar-area">
+            {selectedIds.length > 0 && (
+              <div className="selection-tools">
+                <ColorPicker
+                  currentColor={selectedObject?.color}
+                  onColorChange={handleColorChange}
+                />
+                <div className="object-order-buttons">
+                  <button
+                    type="button"
+                    className="toolbar-btn"
+                    title="Send behind arrows"
+                    onClick={() => selectedIds.forEach((id) => updateObject(id, { sentToBack: true }))}
+                  >
+                    Send to back
+                  </button>
+                  <button
+                    type="button"
+                    className="toolbar-btn"
+                    title="Bring in front of arrows"
+                    onClick={() => selectedIds.forEach((id) => updateObject(id, { sentToBack: false }))}
+                  >
+                    Bring to front
+                  </button>
+                </div>
+              </div>
+            )}
             {isAiOpen && (
               <AgentPanel
                 boardId={boardId}

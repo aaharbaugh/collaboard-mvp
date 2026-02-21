@@ -1,6 +1,6 @@
-import { ref, set, get } from 'firebase/database';
+import { ref, set, get, update, remove } from 'firebase/database';
 import { database } from '../../../lib/firebase';
-import { addBoardToCache } from './boardCache';
+import { addBoardToCache, removeBoardFromCache } from './boardCache';
 
 export async function createNewBoard(userId: string, name = 'New Board'): Promise<string> {
   const newId = crypto.randomUUID();
@@ -17,6 +17,20 @@ export async function createNewBoard(userId: string, name = 'New Board'): Promis
     // Rules not yet deployed — localStorage cache is the fallback
   }
   return newId;
+}
+
+export async function renameBoard(boardId: string, newName: string): Promise<void> {
+  await update(ref(database, `boards/${boardId}/metadata`), { name: newName });
+}
+
+export async function deleteBoard(userId: string, boardId: string): Promise<void> {
+  await remove(ref(database, `boards/${boardId}`));
+  removeBoardFromCache(userId, boardId);
+  try {
+    await remove(ref(database, `userBoards/${userId}/${boardId}`));
+  } catch {
+    // Rules not yet deployed
+  }
 }
 
 export async function duplicateBoard(userId: string, sourceBoardId: string, sourceName: string): Promise<string> {

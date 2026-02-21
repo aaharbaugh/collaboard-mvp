@@ -19,3 +19,12 @@ export function addBoardToCache(userId: string, boardId: string): void {
     // ignore
   }
 }
+
+export function removeBoardFromCache(userId: string, boardId: string): void {
+  try {
+    const ids = getCachedBoardIds(userId);
+    localStorage.setItem(`${PREFIX}${userId}`, JSON.stringify(ids.filter((id) => id !== boardId)));
+  } catch {
+    // ignore
+  }
+}

@@ -74,14 +74,17 @@ export function AgentPanel({ boardId, isOpen, onClose, selectedIds, viewport }: 
       aria-modal="true"
       aria-label="Ask AI"
     >
-      <button
-        type="button"
-        className="agent-close-btn"
-        onClick={onClose}
-        aria-label="Close"
-      >
-        ✕
-      </button>
+      <div className="agent-header">
+        <span className="agent-header-label">Ask AI</span>
+        <button
+          type="button"
+          className="agent-close-btn"
+          onClick={onClose}
+          aria-label="Close"
+        >
+          ✕
+        </button>
+      </div>
       <form className="agent-form" onSubmit={handleSubmit}>
         <input
           ref={inputRef}
