@@ -198,6 +198,101 @@ This builds the frontend and deploys both Firebase Hosting and Cloud Functions. 
 
 ---
 
+## Testing
+
+The project has two separate test suites — one for the frontend (Vitest) and one for the Cloud Functions (Jest).
+
+### Frontend — Vitest
+
+**Run:**
+```bash
+npm run test        # watch mode
+npm run test:run    # run once
+```
+
+**Setup:** `src/test/setup.ts` imports `@testing-library/jest-dom/vitest` to extend Vitest's `expect` with DOM matchers. The environment is `jsdom`.
+
+**What's tested:**
+
+| File | What it covers |
+|------|---------------|
+| `src/App.test.tsx` | App renders AuthGate |
+| `src/features/auth/AuthGate.test.tsx` | Loading state, sign-in UI, renders children when authenticated |
+| `src/features/board/Toolbar.test.tsx` | Tool button rendering, hotkey dispatch |
+| `src/features/board/components/BoardObject.test.tsx` | Object rendering by type |
+| `src/features/board/components/ColorPicker.test.tsx` | Color swatch rendering and selection |
+| `src/features/board/components/objects/Frame.test.tsx` | Frame rendering via react-konva |
+| `src/features/board/components/objects/TextElement.test.tsx` | Text rendering, heading levels |
+| `src/features/agent/AgentPanel.test.tsx` | Dialog open/close, input, submit, loading state, example commands |
+| `src/features/agent/useAgentCommand.test.ts` | Hook — calls Firebase callable, handles errors |
+| `src/components/PresenceList.test.tsx` | Cursor/presence list rendering |
+| `src/lib/store.test.ts` | Zustand store — toolMode, selection, viewport |
+
+**Key mock patterns:**
+
+```ts
+// react-konva (canvas can't run in jsdom)
+vi.mock('react-konva', () => ({
+  Group: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Rect: () => null,
+  Text: () => null,
+  // ...
+}));
+
+// Firebase (avoid real SDK init in tests)
+vi.mock('../../lib/firebase', () => ({
+  auth: { currentUser: null },
+  functions: {},
+}));
+
+// Dynamic import AFTER vi.mock() so the mock is in place first
+const { AgentPanel } = await import('./AgentPanel');
+```
+
+---
+
+### Functions — Jest + ts-jest
+
+**Run (from `functions/`):**
+```bash
+npm test
+```
+
+**Config (`functions/jest.config.js`):**
+- `preset: 'ts-jest'`, `testEnvironment: 'node'`
+- TypeScript is compiled with `module: 'CommonJS'` and `moduleResolution: 'node'` (overrides the NodeNext tsconfig so Jest can resolve modules)
+- `moduleNameMapper` strips `.js` extensions from NodeNext-style imports (e.g. `./agentTools.js` → `./agentTools`)
+
+**What's tested:**
+
+| File | What it covers |
+|------|---------------|
+| `functions/src/agentTools.test.ts` | All tool functions — createStickyNote, createShape, createFrame, createConnector, moveObject, resizeObject, updateText, changeColor, getBoardState, etc. Firebase writes are verified via mocked `admin.database` |
+| `functions/src/agent.test.ts` | `runAgentCommand` — board validation, context loading, OpenAI tool-call loop, error handling |
+
+**Key mock patterns:**
+
+```ts
+// firebase-admin
+jest.mock('firebase-admin', () => ({
+  apps: [],
+  initializeApp: jest.fn(),
+  database: jest.fn(),
+}));
+(admin.database as unknown as jest.Mock).mockReturnValue(mockDb);
+
+// OpenAI — must include __esModule: true to fix "default is not a constructor"
+jest.mock('openai', () => ({
+  __esModule: true,
+  default: jest.fn().mockImplementation(() => mockOpenAIClient),
+}));
+
+// crypto — deterministic IDs in tests
+jest.spyOn(crypto, 'randomUUID').mockReturnValue('test-uuid-1234' as `${string}-${string}-${string}-${string}-${string}`);
+```
+
+---
+
 ## Emulator ports (default)
 
 | Service | Port |
