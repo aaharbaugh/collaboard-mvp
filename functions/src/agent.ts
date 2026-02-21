@@ -472,6 +472,24 @@ async function dispatchTool(
         args['frameId'] as string,
         (args['padding'] as number | undefined) ?? 40
       );
+    case 'createQuadrant':
+      return agentTools.createQuadrant(
+        boardId,
+        args as unknown as agentTools.CreateQuadrantArgs,
+        userId
+      );
+    case 'createColumnLayout':
+      return agentTools.createColumnLayout(
+        boardId,
+        args as unknown as agentTools.CreateColumnLayoutArgs,
+        userId
+      );
+    case 'createDiagram':
+      return agentTools.createDiagram(
+        boardId,
+        args as unknown as agentTools.CreateDiagramArgs,
+        userId
+      );
     case 'moveObject':
       return agentTools.moveObject(
         boardId,
@@ -515,21 +533,32 @@ async function dispatchTool(
 // ---------------------------------------------------------------------------
 
 function buildSpatialBoardStateText(
-  boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> }
+  boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> },
+  /** When provided, positions are shown as signed offsets from this point (reduces digit count on large canvases). */
+  origin?: { x: number; y: number }
 ): string {
+  // Snap to nearest N to reduce digit noise
+  const snap10 = (v: number) => Math.round(v / 10) * 10;
+  const snap5  = (v: number) => Math.round(v / 5) * 5;
+  // Format a position component as a signed relative offset string
+  const relStr = (v: number, ref: number) => { const r = snap10(v - ref); return r >= 0 ? `+${r}` : `${r}`; };
+
   const objValues = Object.values(boardState.objects) as Array<Record<string, unknown>>;
   const connValues = Object.values(boardState.connections) as Array<Record<string, unknown>>;
 
   const objectLines = objValues.map((o) => {
     const text = o['text'] ? `"${String(o['text']).slice(0, 40)}" ` : '';
     const id = String(o['id'] ?? '');
-    const x = Math.round(Number(o['x'] ?? 0));
-    const y = Math.round(Number(o['y'] ?? 0));
-    const w = Math.round(Number(o['width'] ?? 160));
-    const h = Math.round(Number(o['height'] ?? 120));
+    const rawX = Number(o['x'] ?? 0);
+    const rawY = Number(o['y'] ?? 0);
+    const w = snap5(Number(o['width'] ?? 160));
+    const h = snap5(Number(o['height'] ?? 120));
     const color = o['color'] ? ` ${String(o['color'])}` : '';
     const type = String(o['type'] ?? 'unknown');
-    return `  [${type} ${text}id=${id} @ (${x},${y}) ${w}x${h}${color}]`;
+    const posStr = origin
+      ? `(${relStr(rawX, origin.x)},${relStr(rawY, origin.y)})`
+      : `(${snap10(rawX)},${snap10(rawY)})`;
+    return `  [${type} ${text}id=${id} @ ${posStr} ${w}x${h}${color}]`;
   });
 
   const connLines = connValues.map((c) => {
@@ -540,7 +569,7 @@ function buildSpatialBoardStateText(
     return `  ${from} → ${to}${fromA}${toA}`;
   });
 
-  // Compute bounding box of existing objects
+  // Bounding box of existing objects
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
   for (const o of objValues) {
     const x = Number(o['x'] ?? 0);
@@ -553,12 +582,25 @@ function buildSpatialBoardStateText(
     maxY = Math.max(maxY, y + h);
   }
 
-  const occupiedLine = objValues.length > 0
-    ? `Occupied region: x ${Math.round(minX)}–${Math.round(maxX)}, y ${Math.round(minY)}–${Math.round(maxY)}\nFree region for new content: x > ${Math.round(maxX + 100)} or y > ${Math.round(maxY + 100)}`
-    : 'Board is empty. Start placing near (100, 100).';
+  let occupiedLine: string;
+  if (objValues.length > 0) {
+    if (origin) {
+      occupiedLine = `Occupied (rel): x ${relStr(minX, origin.x)}–${relStr(maxX, origin.x)}, y ${relStr(minY, origin.y)}–${relStr(maxY, origin.y)}`;
+    } else {
+      occupiedLine = `Occupied: x ${snap10(minX)}–${snap10(maxX)}, y ${snap10(minY)}–${snap10(maxY)}\nFree: x>${snap10(maxX + 100)} or y>${snap10(maxY + 100)}`;
+    }
+  } else {
+    occupiedLine = origin
+      ? 'Board is empty. Place at (0, 0) relative = viewport center.'
+      : 'Board is empty. Start placing near (100, 100).';
+  }
+
+  const header = origin
+    ? `Objects (${objValues.length}) — positions are ±offsets from viewport center:`
+    : `Objects (${objValues.length}):`;
 
   return [
-    `Objects (${objValues.length}):`,
+    header,
     ...objectLines,
     `Connections (${connValues.length}):`,
     ...connLines,
@@ -570,30 +612,32 @@ function buildSystemPrompt(
   boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> },
   options?: { viewport?: { x: number; y: number; scale: number; width?: number; height?: number }; selectedIds?: string[] }
 ): string {
-  const stateBlock = buildSpatialBoardStateText(boardState);
   const objCount = Object.keys(boardState.objects).length;
   const connCount = Object.keys(boardState.connections).length;
 
-  // Compute viewport center for default placement guidance
+  // Compute viewport center — used for compact relative display AND absolute placement guidance
   let viewportSection = '';
+  let stateOrigin: { x: number; y: number } | undefined;
   if (options?.viewport) {
     const { x, y, scale } = options.viewport;
-    // Use actual canvas dimensions when available; fall back to common defaults
     const CANVAS_W = options.viewport.width ?? 1200;
     const CANVAS_H = options.viewport.height ?? 800;
     const left = Math.round(-x / scale);
-    const top = Math.round(-y / scale);
-    const right = Math.round(left + CANVAS_W / scale);
-    const bottom = Math.round(top + CANVAS_H / scale);
+    const top  = Math.round(-y / scale);
+    const right  = Math.round(left + CANVAS_W / scale);
+    const bottom = Math.round(top  + CANVAS_H / scale);
     const cx = Math.round(left + (right - left) / 2);
-    const cy = Math.round(top + (bottom - top) / 2);
+    const cy = Math.round(top  + (bottom - top)  / 2);
+    stateOrigin = { x: cx, y: cy };
     viewportSection = `
 === CURRENT VIEW ===
-Viewport center: (${cx}, ${cy}) | Visible area: x ${left}–${right}, y ${top}–${bottom}
-Canvas pixel size: ${CANVAS_W}×${CANVAS_H} at scale ${scale.toFixed(2)}
-Place ALL new objects inside the visible area unless the user specifies coordinates.
+Viewport center (ABSOLUTE): (${cx}, ${cy}) | Visible: x ${left}–${right}, y ${top}–${bottom}
+Board state positions are ±offsets from this center. Tool call coords MUST be absolute:
+  abs_x = ${cx} + rel_x  |  abs_y = ${cy} + rel_y
 Default anchor for new content: (${Math.round(cx - 80)}, ${Math.round(cy - 60)}).`;
   }
+
+  const stateBlock = buildSpatialBoardStateText(boardState, stateOrigin);
 
   // Selection context
   let selectionSection = '';
@@ -622,11 +666,16 @@ Origin top-left, X→right, Y→down, pixels. Min gap: 60px.
 x = anchor_x + col*(w+80)  |  y = anchor_y + row*(h+80)
 Frame bounds: x=min(child_x)-40, y=min(child_y)-50, w/h=span+80
 
-=== LAYOUTS (cx,cy = viewport center) ===
+=== COMPOUND TOOLS (prefer these — ONE call instead of 7+) ===
+• SWOT / 2×2 matrix → createQuadrant({ title, quadrantLabels: { topLeft, topRight, bottomLeft, bottomRight }, items: { topLeft: [...], ... }, anchorX: cx, anchorY: cy })
+• Kanban / retro / journey map → createColumnLayout({ title, columns: [{ title, items: [...] }, ...], anchorX: cx, anchorY: cy })
+• Flowchart / sequence diagram → createDiagram({ nodes: [{ label }, ...], edges: [{ from: 0, to: 1 }, ...], layout: "horizontal"|"vertical", anchorX: cx, anchorY: cy })
+All create frame + content + frameId + fit in one atomic write. Use viewport center for anchorX/anchorY when given.
+
+=== LAYOUTS (when NOT using compound tools; cx,cy = viewport center) ===
 Flowchart H: nodes at (cx-N*140+i*280, cy) 200×120, connectInSequence
 Flowchart V: nodes at (cx, cy-N*100+i*200) 200×120, connectInSequence
-SWOT: Frame(cx-300,cy-280,700,600) | S(cx-240,cy-200,green) W(cx-240,cy+30,rose) O(cx+20,cy-200,yellow) T(cx+20,cy+30,peach) each 200×150
-Kanban 3-col: frames at (cx-450,cy-200),(cx-100,cy-200),(cx+250,cy-200) each 300×500
+SWOT: use createQuadrant. Kanban: use createColumnLayout. Flowchart: use createDiagram.
 Mind map: center node + branches at radius 300, angles 0,60,120,180,240,300°
 
 === LAYERS ===
@@ -652,10 +701,13 @@ Round 2 — REQUIRED when frames were created: call addToFrame(childIds, frameId
 Round 3: one short text confirmation, no tool calls.
 
 === RULES ===
-• executePlan is the ONLY way to create objects — no other creation tools exist.
-• FRAMES: every frame MUST have addToFrame called in Round 2 with its child object IDs.
+• PREFER compound tools for templates: createQuadrant (SWOT/matrix), createColumnLayout (kanban/retro), createDiagram (flowchart). One call = one round-trip.
+• For freeform creation use executePlan (objects + connections in one call).
+• FRAMES: when using executePlan, every frame MUST have addToFrame called in Round 2 with its child object IDs. Compound tools set frameId automatically.
   Failure to call addToFrame = children will not move with the frame.
 • Place ALL new objects inside the visible viewport area shown above.
+• COORDINATES: All x/y in tool calls are ABSOLUTE world coords. Board state shows relative
+  offsets (±N) — convert before using: abs_x = viewport_cx + rel_x, abs_y = viewport_cy + rel_y.
 • EXACT COORDS: If user says "at position X, Y" or "at X, Y", use those exact numbers verbatim as x and y params. Do NOT adjust for viewport.
 • SHAPE DEFAULTS: rectangle = width:200, height:120. circle = width:120, height:120.
 • BATCH MOVE: ALWAYS use moveBatch([{id,x,y},...]) instead of multiple moveObject calls.
@@ -733,6 +785,101 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
             },
           },
           required: ['objects', 'connections'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'createQuadrant',
+        description: 'ONE CALL: Create a full quadrant/matrix diagram (e.g. SWOT). Creates frame, axis lines, axis labels, quadrant titles, and sticky notes per quadrant; assigns all to frame and fits frame. Use instead of 7+ separate create/addToFrame calls.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Frame title (e.g. "SWOT Analysis")' },
+            xAxisLabel: { type: 'string', description: 'Optional, e.g. "Low ← → High"' },
+            yAxisLabel: { type: 'string', description: 'Optional, e.g. "Low ← → High"' },
+            quadrantLabels: {
+              type: 'object',
+              properties: {
+                topLeft: { type: 'string' },
+                topRight: { type: 'string' },
+                bottomLeft: { type: 'string' },
+                bottomRight: { type: 'string' },
+              },
+              description: 'Section titles per quadrant (e.g. Strengths, Weaknesses, Opportunities, Threats)',
+            },
+            items: {
+              type: 'object',
+              properties: {
+                topLeft: { type: 'array', items: { type: 'string' } },
+                topRight: { type: 'array', items: { type: 'string' } },
+                bottomLeft: { type: 'array', items: { type: 'string' } },
+                bottomRight: { type: 'array', items: { type: 'string' } },
+              },
+              description: 'Sticky note text per quadrant',
+            },
+            anchorX: { type: 'number', description: 'Placement X (e.g. viewport center). Omit to auto-place.' },
+            anchorY: { type: 'number', description: 'Placement Y. Omit to auto-place.' },
+          },
+          required: ['title'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'createColumnLayout',
+        description: 'ONE CALL: Create kanban/retro/journey map. Frame + column headers + sticky notes per column; frameId set and frame fitted. Use instead of 5+ separate calls.',
+        parameters: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', description: 'Frame title' },
+            columns: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  title: { type: 'string', description: 'Column header' },
+                  items: { type: 'array', items: { type: 'string' }, description: 'Sticky note text' },
+                },
+                required: ['title', 'items'],
+              },
+            },
+            anchorX: { type: 'number' },
+            anchorY: { type: 'number' },
+          },
+          required: ['title', 'columns'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'createDiagram',
+        description: 'ONE CALL: Create flowchart/sequence. Nodes (sticky notes) + connectors in one write. Layout horizontal or vertical by node index.',
+        parameters: {
+          type: 'object',
+          properties: {
+            nodes: {
+              type: 'array',
+              items: { type: 'object', properties: { label: { type: 'string' } }, required: ['label'] },
+              description: 'Node labels; order = position',
+            },
+            edges: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: { from: { type: 'number' }, to: { type: 'number' } },
+                required: ['from', 'to'],
+                description: 'Indices into nodes (0-based)',
+              },
+            },
+            layout: { type: 'string', enum: ['horizontal', 'vertical'] },
+            anchorX: { type: 'number' },
+            anchorY: { type: 'number' },
+          },
+          required: ['nodes', 'edges'],
         },
       },
     },

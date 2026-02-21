@@ -6,7 +6,10 @@ import { getAnchorWorldPoint } from '../utils/anchorPoint';
 
 interface ConnectionLineProps {
   connection: Connection;
-  objects: Record<string, BoardObject>;
+  /** Endpoint objects passed directly so the memo comparison can check only the fields
+   *  that affect rendering (position, size, rotation) rather than the entire objects map. */
+  fromObj: BoardObject;
+  toObj: BoardObject;
   zoomScale: number;
   isSelected?: boolean;
   onSelect?: (connId: string) => void;
@@ -15,9 +18,38 @@ interface ConnectionLineProps {
   onDoubleClick?: (connId: string, x: number, y: number) => void;
 }
 
-export function ConnectionLine({
+/** Field-level comparison — skip re-render unless something that affects the canvas actually changed. */
+function areEqual(prev: ConnectionLineProps, next: ConnectionLineProps): boolean {
+  if (prev.zoomScale !== next.zoomScale) return false;
+  if (prev.isSelected !== next.isSelected) return false;
+  if (prev.connection.id !== next.connection.id) return false;
+  if (prev.connection.color !== next.connection.color) return false;
+  if (prev.connection.fromAnchor !== next.connection.fromAnchor) return false;
+  if (prev.connection.toAnchor !== next.connection.toAnchor) return false;
+  // Shallow-check waypoints by reference first, then by content
+  const pp = prev.connection.points;
+  const np = next.connection.points;
+  if (pp !== np) {
+    if (!pp || !np || pp.length !== np.length) return false;
+    for (let i = 0; i < pp.length; i++) if (pp[i] !== np[i]) return false;
+  }
+  // Compare endpoint geometry (not object references — liveObjects always creates new refs)
+  const pf = prev.fromObj, nf = next.fromObj;
+  if (pf.x !== nf.x || pf.y !== nf.y || pf.width !== nf.width || pf.height !== nf.height || (pf.rotation ?? 0) !== (nf.rotation ?? 0)) return false;
+  const pt = prev.toObj, nt = next.toObj;
+  if (pt.x !== nt.x || pt.y !== nt.y || pt.width !== nt.width || pt.height !== nt.height || (pt.rotation ?? 0) !== (nt.rotation ?? 0)) return false;
+  // Handler references are stable useCallbacks — only compare if needed
+  if (prev.onSelect !== next.onSelect) return false;
+  if (prev.onWaypointDrag !== next.onWaypointDrag) return false;
+  if (prev.onWaypointDragEnd !== next.onWaypointDragEnd) return false;
+  if (prev.onDoubleClick !== next.onDoubleClick) return false;
+  return true;
+}
+
+export const ConnectionLine = React.memo(function ConnectionLine({
   connection,
-  objects,
+  fromObj,
+  toObj,
   zoomScale,
   isSelected,
   onSelect,
@@ -25,10 +57,6 @@ export function ConnectionLine({
   onWaypointDragEnd,
   onDoubleClick,
 }: ConnectionLineProps) {
-  const fromObj = objects[connection.fromId];
-  const toObj = objects[connection.toId];
-  if (!fromObj || !toObj) return null;
-
   const from = getAnchorWorldPoint(fromObj, connection.fromAnchor);
   const to = getAnchorWorldPoint(toObj, connection.toAnchor);
 
@@ -37,22 +65,18 @@ export function ConnectionLine({
   const ptrLen = 10 / zoomScale;
   const ptrW = 8 / zoomScale;
 
-  // Only hide when the larger node is too small on screen: use each node's biggest dimension in px, then the max of the two
+  // Only hide when the larger node is too small on screen
   const fromPx = Math.max(fromObj.width * zoomScale, fromObj.height * zoomScale);
   const toPx = Math.max(toObj.width * zoomScale, toObj.height * zoomScale);
   const maxNodePx = Math.max(fromPx, toPx);
   if (maxNodePx < 10) return null;
 
-  const destinationTiny = toPx < 14; // destination node small on screen → hide arrowhead only
+  const destinationTiny = toPx < 14;
 
-  // Normalize waypoints: ensure we have a real array of pairs (x,y); empty/undefined = 0-waypoint arrow
   const rawPoints = connection.points;
   const waypoints =
-    Array.isArray(rawPoints) && rawPoints.length >= 2
-      ? rawPoints
-      : [];
+    Array.isArray(rawPoints) && rawPoints.length >= 2 ? rawPoints : [];
 
-  // For 0-waypoint arrows, use exactly [from, to] so the line goes straight to the destination.
   const allPoints =
     waypoints.length === 0
       ? [from.x, from.y, to.x, to.y]
@@ -74,7 +98,6 @@ export function ConnectionLine({
     onDoubleClick?.(connection.id, worldPos.x, worldPos.y);
   };
 
-  // Build waypoint circles for editing
   const waypointCircles: React.ReactElement[] = [];
   if (isSelected && waypoints.length >= 2) {
     for (let i = 0; i < waypoints.length; i += 2) {
@@ -93,7 +116,6 @@ export function ConnectionLine({
             onWaypointDrag?.(connection.id, wpIndex, e.target.x(), e.target.y());
           }}
           onDragEnd={() => {
-            // Collect current waypoint positions
             const newPoints = [...waypoints];
             onWaypointDragEnd?.(connection.id, newPoints);
           }}
@@ -121,4 +143,4 @@ export function ConnectionLine({
       {waypointCircles}
     </Group>
   );
-}
+}, areEqual);

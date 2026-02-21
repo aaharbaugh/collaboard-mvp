@@ -65,7 +65,6 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
         stroke={showSelectionBorder && isSelected ? '#4a7c59' : remoteColor ?? undefined}
         strokeWidth={hasStroke ? sw : 0}
         dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
-        cornerRadius={2 / zoomScale}
       />
       {showText && (
         <>

@@ -1,8 +1,23 @@
 import { useState, useEffect } from 'react';
 import { ref, set, get, update } from 'firebase/database';
 import { database } from '../../../lib/firebase';
+import { addBoardToCache } from '../utils/boardCache';
 
 const SHARED_DEMO_BOARD_ID = 'demo';
+
+function getUrlBoardId(): string | null {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('board');
+}
+
+/** Best-effort: index the board under userBoards. Never throws. */
+async function tryIndexBoard(userId: string, boardId: string): Promise<void> {
+  try {
+    await set(ref(database, `userBoards/${userId}/${boardId}`), true);
+  } catch {
+    // Rules not deployed yet — board listing won't work until rules are updated
+  }
+}
 
 export function useBoardId(userId: string | undefined) {
   const [boardId, setBoardId] = useState<string | null>(null);
@@ -19,8 +34,7 @@ export function useBoardId(userId: string | undefined) {
 
     const createPersonalBoard = async (): Promise<string> => {
       const newId = crypto.randomUUID();
-      const boardRef = ref(database, `boards/${newId}`);
-      await set(boardRef, {
+      await set(ref(database, `boards/${newId}`), {
         metadata: {
           owner: userId,
           name: 'My Board',
@@ -30,12 +44,36 @@ export function useBoardId(userId: string | undefined) {
         objects: {},
         cursors: {},
       });
+      addBoardToCache(userId, newId);
+      await tryIndexBoard(userId, newId);
       return newId;
     };
 
     const initBoard = async () => {
       setError(null);
       try {
+        // If a board ID is specified in the URL, try to join that board
+        const urlBoardId = getUrlBoardId();
+        if (urlBoardId) {
+          const urlBoardRef = ref(database, `boards/${urlBoardId}`);
+          const urlSnapshot = await get(urlBoardRef);
+          if (urlSnapshot.exists()) {
+            const collaborators = urlSnapshot.child('collaborators').val() || {};
+            if (!collaborators[userId]) {
+              await update(ref(database, `boards/${urlBoardId}`), {
+                [`collaborators/${userId}`]: true,
+              });
+            }
+            addBoardToCache(userId, urlBoardId);
+            await tryIndexBoard(userId, urlBoardId);
+            if (!cancelled) {
+              setBoardId(urlBoardId);
+              setLoading(false);
+            }
+            return;
+          }
+        }
+
         const boardRef = ref(database, `boards/${SHARED_DEMO_BOARD_ID}`);
 
         const timeoutMs = 10000;
@@ -75,6 +113,9 @@ export function useBoardId(userId: string | undefined) {
             });
           }
         }
+
+        addBoardToCache(userId, SHARED_DEMO_BOARD_ID);
+        await tryIndexBoard(userId, SHARED_DEMO_BOARD_ID);
 
         if (!cancelled) {
           setBoardId(SHARED_DEMO_BOARD_ID);

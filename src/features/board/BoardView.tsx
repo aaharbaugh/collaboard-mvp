@@ -11,6 +11,7 @@ import { useBoardSync } from '../sync/useBoardSync';
 import { TextEditingOverlay } from '../../components/TextEditingOverlay';
 import { ColorPicker } from './components/ColorPicker';
 import { AgentPanel } from '../agent/AgentPanel';
+import { UserBoardsPanel } from './components/UserBoardsPanel';
 import {
   getPersistedEditState,
   setPersistedEditState,
@@ -19,7 +20,9 @@ import {
 
 export function BoardView() {
   const { user, signOut } = useAuth();
-  const { boardId, loading: boardLoading, error: boardError } = useBoardId(user?.uid);
+  const { boardId: defaultBoardId, loading: boardLoading, error: boardError } = useBoardId(user?.uid);
+  const [boardIdOverride, setBoardIdOverride] = useState<string | null>(null);
+  const boardId = boardIdOverride ?? defaultBoardId;
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isAiOpen, setIsAiOpen] = useState(false);
   const [restoredDraft, setRestoredDraft] = useState<string | null>(null);
@@ -34,7 +37,10 @@ export function BoardView() {
     user?.uid,
     user?.displayName ?? 'Anonymous'
   );
-  const { viewport, setViewport, selectedIds, setSelection } = useBoardStore();
+  const viewport    = useBoardStore((s) => s.viewport);
+  const setViewport = useBoardStore((s) => s.setViewport);
+  const selectedIds = useBoardStore((s) => s.selectedIds);
+  const setSelection = useBoardStore((s) => s.setSelection);
 
   const selectedObject = selectedIds.length === 1 ? objects[selectedIds[0]] : null;
 
@@ -115,6 +121,15 @@ export function BoardView() {
     setRestoredDraft(null);
   };
 
+  const handleBoardSwitch = (id: string) => {
+    setSelection([]);
+    setEditingId(null);
+    setRestoredDraft(null);
+    hasRestoredRef.current = false;
+    if (boardId) clearPersistedEditState(boardId);
+    setBoardIdOverride(id);
+  };
+
   const handleDraftChange = (text: string) => {
     latestDraftRef.current = text;
     if (boardId && editingId) {
@@ -190,6 +205,13 @@ export function BoardView() {
         <div className="board-header-right">
           <PresenceList cursors={cursors} />
           <div className="user-menu">
+            {boardId && (
+              <UserBoardsPanel
+                userId={user.uid}
+                currentBoardId={boardId}
+                onBoardSwitch={handleBoardSwitch}
+              />
+            )}
             <span className="user-name">{user.displayName ?? 'User'}</span>
             <button className="btn-sign-out" onClick={signOut}>
               Sign out

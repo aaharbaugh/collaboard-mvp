@@ -19,6 +19,8 @@ const EXAMPLE_COMMANDS = [
 export function AgentPanel({ boardId, isOpen, onClose, selectedIds, viewport }: AgentPanelProps) {
   const [command, setCommand] = useState('');
   const { runCommand, loading, error, agentStatus } = useAgentCommand(boardId);
+
+  if (!isOpen) return null;
   const inputRef = useRef<HTMLInputElement>(null);
   const popupRef = useRef<HTMLDivElement>(null);
 

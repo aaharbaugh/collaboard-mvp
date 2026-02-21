@@ -3,6 +3,43 @@ import { ref, onValue, set, update, remove } from 'firebase/database';
 import { database } from '../../lib/firebase';
 import type { BoardObject, Connection } from '../../types/board';
 
+// ---------------------------------------------------------------------------
+// Field-level diff helpers — only trigger re-renders for objects that changed
+// ---------------------------------------------------------------------------
+
+function hasObjectChanged(prev: BoardObject, next: BoardObject): boolean {
+  return (
+    prev.x !== next.x ||
+    prev.y !== next.y ||
+    prev.width !== next.width ||
+    prev.height !== next.height ||
+    prev.text !== next.text ||
+    prev.color !== next.color ||
+    prev.rotation !== next.rotation ||
+    prev.sentToBack !== next.sentToBack ||
+    prev.frameId !== next.frameId ||
+    prev.selectedBy !== next.selectedBy ||
+    prev.selectedByName !== next.selectedByName ||
+    prev.headingLevel !== next.headingLevel ||
+    prev.type !== next.type
+  );
+}
+
+function hasConnectionChanged(prev: Connection, next: Connection): boolean {
+  if (
+    prev.fromId !== next.fromId ||
+    prev.toId !== next.toId ||
+    prev.fromAnchor !== next.fromAnchor ||
+    prev.toAnchor !== next.toAnchor ||
+    prev.color !== next.color
+  ) return true;
+  const pp = prev.points, np = next.points;
+  if (pp === np) return false;
+  if (!pp || !np || pp.length !== np.length) return true;
+  for (let i = 0; i < pp.length; i++) if (pp[i] !== np[i]) return true;
+  return false;
+}
+
 export function useBoardSync(boardId: string | null) {
   const [objects, setObjects] = useState<Record<string, BoardObject>>({});
   const [connections, setConnections] = useState<Record<string, Connection>>({});
@@ -16,14 +53,46 @@ export function useBoardSync(boardId: string | null) {
 
     const objectsRef = ref(database, `boards/${boardId}/objects`);
     const unsubObjects = onValue(objectsRef, (snapshot) => {
-      const raw = snapshot.val() || {};
-      setObjects(raw as Record<string, BoardObject>);
+      const raw = (snapshot.val() || {}) as Record<string, BoardObject>;
+      // Copy-on-write: only update entries that actually changed, return same
+      // reference if nothing changed so downstream useMemos don't invalidate.
+      setObjects((prev) => {
+        let next = prev;
+        for (const id of Object.keys(prev)) {
+          if (!raw[id]) {
+            if (next === prev) next = { ...prev };
+            delete next[id];
+          }
+        }
+        for (const [id, newObj] of Object.entries(raw)) {
+          if (!prev[id] || hasObjectChanged(prev[id], newObj)) {
+            if (next === prev) next = { ...prev };
+            next[id] = newObj;
+          }
+        }
+        return next;
+      });
     });
 
     const connectionsRef = ref(database, `boards/${boardId}/connections`);
     const unsubConnections = onValue(connectionsRef, (snapshot) => {
-      const raw = snapshot.val() || {};
-      setConnections(raw as Record<string, Connection>);
+      const raw = (snapshot.val() || {}) as Record<string, Connection>;
+      setConnections((prev) => {
+        let next = prev;
+        for (const id of Object.keys(prev)) {
+          if (!raw[id]) {
+            if (next === prev) next = { ...prev };
+            delete next[id];
+          }
+        }
+        for (const [id, newConn] of Object.entries(raw)) {
+          if (!prev[id] || hasConnectionChanged(prev[id], newConn)) {
+            if (next === prev) next = { ...prev };
+            next[id] = newConn;
+          }
+        }
+        return next;
+      });
     });
 
     return () => {

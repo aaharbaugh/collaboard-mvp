@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { subscribeWithSelector } from 'zustand/middleware';
 
 export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'text' | 'frame';
 
@@ -29,7 +30,7 @@ interface BoardStore {
   cyclePointerTool: () => void;
 }
 
-export const useBoardStore = create<BoardStore>((set) => ({
+export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) => ({
   viewport: { x: 0, y: 0, scale: 1 },
   setViewport: (vp) =>
     set((state) => ({
@@ -53,4 +54,4 @@ export const useBoardStore = create<BoardStore>((set) => ({
       const next = idx >= 0 ? POINTER_CYCLE[(idx + 1) % POINTER_CYCLE.length] : POINTER_CYCLE[0];
       return { toolMode: next };
     }),
-}));
+})));

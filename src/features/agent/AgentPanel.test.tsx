@@ -7,6 +7,7 @@ const mockUseAgentCommand = vi.fn();
 
 vi.mock('./useAgentCommand', () => ({
   useAgentCommand: mockUseAgentCommand,
+  getStatusMessage: vi.fn(() => 'Working...'),
 }));
 
 const { AgentPanel } = await import('./AgentPanel');
@@ -92,7 +93,9 @@ describe('AgentPanel', () => {
     mockUseAgentCommand.mockReturnValue(defaultHookState({ loading: true }));
     render(<AgentPanel {...defaultProps} />);
     expect(screen.getByRole('textbox', { name: /ai command/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /working/i })).toBeDisabled();
+    // When loading, submit button shows '...' and is disabled
+    const submitBtn = screen.getByRole('button', { name: /\.\.\./i });
+    expect(submitBtn).toBeDisabled();
   });
 
   it('displays error message when error state is set', () => {

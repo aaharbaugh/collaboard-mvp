@@ -61,6 +61,50 @@ export interface PlanConnection {
 }
 
 // ---------------------------------------------------------------------------
+// Compound tool args (single LLM call → atomic board update)
+// ---------------------------------------------------------------------------
+
+export interface CreateQuadrantArgs {
+  title: string;
+  xAxisLabel?: string;
+  yAxisLabel?: string;
+  quadrantLabels?: {
+    topLeft?: string;
+    topRight?: string;
+    bottomLeft?: string;
+    bottomRight?: string;
+  };
+  items?: {
+    topLeft?: string[];
+    topRight?: string[];
+    bottomLeft?: string[];
+    bottomRight?: string[];
+  };
+  /** Placement anchor (e.g. viewport center). If omitted, server finds open space. */
+  anchorX?: number;
+  anchorY?: number;
+}
+
+export interface CreateColumnLayoutArgs {
+  title: string;
+  columns: Array<{ title: string; items: string[] }>;
+  /** Placement anchor. If omitted, server finds open space. */
+  anchorX?: number;
+  anchorY?: number;
+}
+
+export interface CreateDiagramArgs {
+  /** Node labels; order determines layout position. */
+  nodes: Array<{ label: string }>;
+  /** Edges by node index: { from: 0, to: 1 }. */
+  edges: Array<{ from: number; to: number }>;
+  layout?: 'horizontal' | 'vertical';
+  /** Placement anchor. If omitted, server finds open space. */
+  anchorX?: number;
+  anchorY?: number;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -557,6 +601,367 @@ export async function executePlan(
   }
 
   return { idMap, connectionIds };
+}
+
+// ---------------------------------------------------------------------------
+// Compound tools — single call creates frame + axes + labels + notes + frameId + fit
+// ---------------------------------------------------------------------------
+
+const STICKY_W = 160;
+const STICKY_H = 120;
+const QUADRANT_PADDING = 40;
+const QUADRANT_TITLE_BAR = 50;
+const AXIS_LINE_THICK = 2;
+const COLUMN_GAP = 24;
+const ROW_GAP = 20;
+const DIAGRAM_NODE_W = 200;
+const DIAGRAM_NODE_H = 120;
+const DIAGRAM_GAP = 80;
+
+/** Resolve anchor (anchorX, anchorY) or find open space to the right of existing content. */
+async function getPlacementAnchor(
+  boardId: string,
+  anchorX: number | undefined,
+  anchorY: number | undefined,
+  neededWidth: number,
+  neededHeight: number
+): Promise<{ x: number; y: number }> {
+  if (typeof anchorX === 'number' && typeof anchorY === 'number') {
+    return { x: anchorX, y: anchorY };
+  }
+  const snap = await admin.database().ref(`boards/${boardId}/objects`).once('value');
+  const raw: Record<string, unknown> = snap.val() ?? {};
+  let maxRight = 0;
+  let maxBottom = 0;
+  for (const obj of Object.values(raw)) {
+    if (!obj || typeof obj !== 'object') continue;
+    const o = obj as Record<string, unknown>;
+    const x = Number(o['x'] ?? 0);
+    const y = Number(o['y'] ?? 0);
+    const w = Number(o['width'] ?? 0);
+    const h = Number(o['height'] ?? 0);
+    maxRight = Math.max(maxRight, x + w);
+    maxBottom = Math.max(maxBottom, y + h);
+  }
+  const pad = 80;
+  return { x: maxRight + pad, y: Math.max(0, maxBottom - neededHeight) };
+}
+
+/**
+ * Create a quadrant/matrix diagram (e.g. SWOT) in one atomic write: frame, axis lines,
+ * axis labels, quadrant titles, sticky notes per quadrant, all assigned to frame, then fit.
+ */
+export async function createQuadrant(
+  boardId: string,
+  args: CreateQuadrantArgs,
+  userId: string
+): Promise<{ frameId: string; objectIds: string[] }> {
+  const now = Date.now();
+  const title = args.title ?? 'Quadrant';
+  const xAxisLabel = args.xAxisLabel ?? 'Low ← → High';
+  const yAxisLabel = args.yAxisLabel ?? 'Low ← → High';
+  const ql = args.quadrantLabels ?? {};
+  const items = args.items ?? {};
+
+  // Content size: 2 columns of quadrants, each side ~280px + axis + padding
+  const innerW = 600;
+  const innerH = 520;
+  const totalW = innerW + QUADRANT_PADDING * 2;
+  const totalH = innerH + QUADRANT_PADDING * 2 + QUADRANT_TITLE_BAR;
+
+  const anchor = await getPlacementAnchor(boardId, args.anchorX, args.anchorY, totalW, totalH);
+  const fx = anchor.x;
+  const fy = anchor.y;
+  const cx = fx + QUADRANT_PADDING + innerW / 2;
+  const cy = fy + QUADRANT_TITLE_BAR + QUADRANT_PADDING + innerH / 2;
+
+  const frameId = randomUUID();
+  const updates: Record<string, unknown> = {};
+
+  // Frame (will be resized at end)
+  updates[`boards/${boardId}/objects/${frameId}`] = {
+    id: frameId,
+    type: 'frame',
+    text: title,
+    x: fx,
+    y: fy,
+    width: totalW,
+    height: totalH,
+    color: '#12121a',
+    sentToBack: true,
+    createdBy: userId,
+    createdAt: now,
+  };
+
+  // Axis lines (thin rectangles)
+  const vLineId = randomUUID();
+  const hLineId = randomUUID();
+  const vX = cx - AXIS_LINE_THICK / 2;
+  const vY = fy + QUADRANT_TITLE_BAR + QUADRANT_PADDING;
+  const hX = fx + QUADRANT_PADDING;
+  const hY = cy - AXIS_LINE_THICK / 2;
+  updates[`boards/${boardId}/objects/${vLineId}`] = {
+    id: vLineId,
+    type: 'rectangle',
+    x: vX,
+    y: vY,
+    width: AXIS_LINE_THICK,
+    height: innerH,
+    color: '#4a5568',
+    frameId,
+    sentToBack: true,
+    createdBy: userId,
+    createdAt: now,
+  };
+  updates[`boards/${boardId}/objects/${hLineId}`] = {
+    id: hLineId,
+    type: 'rectangle',
+    x: hX,
+    y: hY,
+    width: innerW,
+    height: AXIS_LINE_THICK,
+    color: '#4a5568',
+    frameId,
+    sentToBack: true,
+    createdBy: userId,
+    createdAt: now,
+  };
+
+  // Axis labels (text)
+  const labelH = 22;
+  const xLowId = randomUUID();
+  const xHighId = randomUUID();
+  const yLowId = randomUUID();
+  const yHighId = randomUUID();
+  const xParts = xAxisLabel.split(/[←→\-–]/).map((s) => s.trim()).filter(Boolean);
+  const yParts = yAxisLabel.split(/[←→\-–]/).map((s) => s.trim()).filter(Boolean);
+  const xLow = xParts[0] ?? 'Low';
+  const xHigh = xParts[xParts.length - 1] ?? (xParts[0] ? '' : 'High');
+  const yLow = yParts[0] ?? 'Low';
+  const yHigh = yParts[yParts.length - 1] ?? (yParts[0] ? '' : 'High');
+  updates[`boards/${boardId}/objects/${xLowId}`] = { id: xLowId, type: 'text', text: xLow, x: hX, y: hY + 8, width: 60, height: labelH, color: '#718096', frameId, createdBy: userId, createdAt: now };
+  updates[`boards/${boardId}/objects/${xHighId}`] = { id: xHighId, type: 'text', text: xHigh, x: hX + innerW - 60, y: hY + 8, width: 60, height: labelH, color: '#718096', frameId, createdBy: userId, createdAt: now };
+  updates[`boards/${boardId}/objects/${yLowId}`] = { id: yLowId, type: 'text', text: yLow, x: vX - 50, y: vY + innerH - 24, width: 50, height: labelH, color: '#718096', frameId, createdBy: userId, createdAt: now };
+  updates[`boards/${boardId}/objects/${yHighId}`] = { id: yHighId, type: 'text', text: yHigh, x: vX - 50, y: vY, width: 50, height: labelH, color: '#718096', frameId, createdBy: userId, createdAt: now };
+
+  const quadrantColors = { topLeft: PALETTE.green, topRight: PALETTE.rose, bottomLeft: PALETTE.yellow, bottomRight: PALETTE.peach };
+  const objectIds: string[] = [frameId, vLineId, hLineId, xLowId, xHighId, yLowId, yHighId];
+
+  // Quadrant section titles
+  const qTitleW = 200;
+  const qTitleH = 28;
+  const topLeftTitleX = fx + QUADRANT_PADDING + 20;
+  const topLeftTitleY = fy + QUADRANT_TITLE_BAR + QUADRANT_PADDING + 8;
+  const topRightTitleX = cx + 20;
+  const topRightTitleY = topLeftTitleY;
+  const bottomLeftTitleX = topLeftTitleX;
+  const bottomLeftTitleY = cy + 12;
+  const bottomRightTitleX = topRightTitleX;
+  const bottomRightTitleY = bottomLeftTitleY;
+
+  for (const [key, label] of Object.entries(ql)) {
+    if (!label) continue;
+    const id = randomUUID();
+    let x = 0, y = 0;
+    if (key === 'topLeft') { x = topLeftTitleX; y = topLeftTitleY; }
+    else if (key === 'topRight') { x = topRightTitleX; y = topRightTitleY; }
+    else if (key === 'bottomLeft') { x = bottomLeftTitleX; y = bottomLeftTitleY; }
+    else if (key === 'bottomRight') { x = bottomRightTitleX; y = bottomRightTitleY; }
+    else continue;
+    updates[`boards/${boardId}/objects/${id}`] = { id, type: 'text', text: label, x, y, width: qTitleW, height: qTitleH, color: '#1a1a1a', frameId, createdBy: userId, createdAt: now };
+    objectIds.push(id);
+  }
+
+  // Sticky notes per quadrant (grid within each quadrant)
+  const halfW = innerW / 2;
+  const halfH = innerH / 2;
+  const quadrants: Array<{ key: keyof typeof items; startX: number; startY: number; w: number; h: number; color: string }> = [
+    { key: 'topLeft', startX: fx + QUADRANT_PADDING, startY: fy + QUADRANT_TITLE_BAR + QUADRANT_PADDING, w: halfW - 10, h: halfH - 10, color: quadrantColors.topLeft },
+    { key: 'topRight', startX: cx + 10, startY: fy + QUADRANT_TITLE_BAR + QUADRANT_PADDING, w: halfW - 10, h: halfH - 10, color: quadrantColors.topRight },
+    { key: 'bottomLeft', startX: fx + QUADRANT_PADDING, startY: cy + 10, w: halfW - 10, h: halfH - 10, color: quadrantColors.bottomLeft },
+    { key: 'bottomRight', startX: cx + 10, startY: cy + 10, w: halfW - 10, h: halfH - 10, color: quadrantColors.bottomRight },
+  ];
+  for (const q of quadrants) {
+    const list = items[q.key] ?? [];
+    const cols = 2;
+    for (let i = 0; i < list.length; i++) {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      const sx = q.startX + 36 + col * (STICKY_W + COLUMN_GAP);
+      const sy = q.startY + 40 + row * (STICKY_H + ROW_GAP);
+      const id = randomUUID();
+      updates[`boards/${boardId}/objects/${id}`] = {
+        id,
+        type: 'stickyNote',
+        text: list[i],
+        x: sx,
+        y: sy,
+        width: STICKY_W,
+        height: STICKY_H,
+        color: mapColorNameToHex(q.color),
+        frameId,
+        createdBy: userId,
+        createdAt: now,
+      };
+      objectIds.push(id);
+    }
+  }
+
+  await admin.database().ref().update(updates);
+  await fitFrameToContents(boardId, frameId, QUADRANT_PADDING);
+  return { frameId, objectIds };
+}
+
+/**
+ * Create a column layout (kanban, retro, journey map) in one atomic write.
+ */
+export async function createColumnLayout(
+  boardId: string,
+  args: CreateColumnLayoutArgs,
+  userId: string
+): Promise<{ frameId: string; objectIds: string[] }> {
+  const now = Date.now();
+  const columns = args.columns ?? [];
+  if (columns.length === 0) throw new Error('createColumnLayout requires at least one column');
+
+  const colW = 280;
+  const headerH = 44;
+  const maxRows = Math.max(4, ...columns.map((c) => c.items?.length ?? 0));
+  const totalW = columns.length * colW + (columns.length - 1) * COLUMN_GAP + QUADRANT_PADDING * 2;
+  const totalH = QUADRANT_TITLE_BAR + QUADRANT_PADDING + headerH + maxRows * (STICKY_H + ROW_GAP) + QUADRANT_PADDING;
+
+  const anchor = await getPlacementAnchor(boardId, args.anchorX, args.anchorY, totalW, totalH);
+  const fx = anchor.x;
+  const fy = anchor.y;
+
+  const frameId = randomUUID();
+  const updates: Record<string, unknown> = {};
+  updates[`boards/${boardId}/objects/${frameId}`] = {
+    id: frameId,
+    type: 'frame',
+    text: args.title ?? 'Board',
+    x: fx,
+    y: fy,
+    width: totalW,
+    height: totalH,
+    color: '#12121a',
+    sentToBack: true,
+    createdBy: userId,
+    createdAt: now,
+  };
+  const objectIds: string[] = [frameId];
+
+  let x = fx + QUADRANT_PADDING;
+  for (const col of columns) {
+    const titleId = randomUUID();
+    updates[`boards/${boardId}/objects/${titleId}`] = {
+      id: titleId,
+      type: 'text',
+      text: col.title ?? 'Column',
+      x,
+      y: fy + QUADRANT_TITLE_BAR + 8,
+      width: colW,
+      height: headerH - 16,
+      color: '#1a1a1a',
+      frameId,
+      createdBy: userId,
+      createdAt: now,
+    };
+    objectIds.push(titleId);
+
+    const items = col.items ?? [];
+    for (let i = 0; i < items.length; i++) {
+      const id = randomUUID();
+      const sy = fy + QUADRANT_TITLE_BAR + headerH + 12 + i * (STICKY_H + ROW_GAP);
+      updates[`boards/${boardId}/objects/${id}`] = {
+        id,
+        type: 'stickyNote',
+        text: items[i],
+        x,
+        y: sy,
+        width: STICKY_W,
+        height: STICKY_H,
+        color: mapColorNameToHex(PALETTE.yellow),
+        frameId,
+        createdBy: userId,
+        createdAt: now,
+      };
+      objectIds.push(id);
+    }
+    x += colW + COLUMN_GAP;
+  }
+
+  await admin.database().ref().update(updates);
+  await fitFrameToContents(boardId, frameId, QUADRANT_PADDING);
+  return { frameId, objectIds };
+}
+
+/**
+ * Create a flowchart/diagram: nodes (rectangles) + connectors in one atomic write.
+ */
+export async function createDiagram(
+  boardId: string,
+  args: CreateDiagramArgs,
+  userId: string
+): Promise<{ nodeIds: string[]; connectionIds: string[] }> {
+  const now = Date.now();
+  const nodes = args.nodes ?? [];
+  const edges = args.edges ?? [];
+  const layout = args.layout ?? 'horizontal';
+
+  if (nodes.length === 0) throw new Error('createDiagram requires at least one node');
+
+  const anchor = await getPlacementAnchor(
+    boardId,
+    args.anchorX,
+    args.anchorY,
+    nodes.length * (DIAGRAM_NODE_W + DIAGRAM_GAP),
+    (layout === 'vertical' ? nodes.length : 1) * (DIAGRAM_NODE_H + DIAGRAM_GAP)
+  );
+  const updates: Record<string, unknown> = {};
+  const nodeIds: string[] = [];
+  const nodePositions: BoardObjectLite[] = [];
+
+  for (let i = 0; i < nodes.length; i++) {
+    const id = randomUUID();
+    const nx = layout === 'vertical'
+      ? anchor.x + (DIAGRAM_NODE_W + DIAGRAM_GAP) / 2
+      : anchor.x + i * (DIAGRAM_NODE_W + DIAGRAM_GAP);
+    const ny = layout === 'vertical'
+      ? anchor.y + i * (DIAGRAM_NODE_H + DIAGRAM_GAP)
+      : anchor.y;
+    updates[`boards/${boardId}/objects/${id}`] = {
+      id,
+      type: 'stickyNote',
+      text: nodes[i].label ?? '',
+      x: nx,
+      y: ny,
+      width: DIAGRAM_NODE_W,
+      height: DIAGRAM_NODE_H,
+      color: mapColorNameToHex(PALETTE.blue),
+      createdBy: userId,
+      createdAt: now,
+    };
+    nodeIds.push(id);
+    nodePositions.push({ x: nx, y: ny, width: DIAGRAM_NODE_W, height: DIAGRAM_NODE_H });
+  }
+
+  const connectionIds: string[] = [];
+  for (const edge of edges) {
+    const fromIdx = edge.from;
+    const toIdx = edge.to;
+    if (fromIdx < 0 || fromIdx >= nodeIds.length || toIdx < 0 || toIdx >= nodeIds.length) continue;
+    const fromId = nodeIds[fromIdx];
+    const toId = nodeIds[toIdx];
+    const fromObj = nodePositions[fromIdx];
+    const toObj = nodePositions[toIdx];
+    const { id: connId, data } = _buildConnectionData(fromId, toId, fromObj, toObj, {}, userId);
+    updates[`boards/${boardId}/connections/${connId}`] = data;
+    connectionIds.push(connId);
+  }
+
+  await admin.database().ref().update(updates);
+  return { nodeIds, connectionIds };
 }
 
 // ---------------------------------------------------------------------------

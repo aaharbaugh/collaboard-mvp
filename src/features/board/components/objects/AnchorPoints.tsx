@@ -1,3 +1,4 @@
+import React from 'react';
 import { Circle } from 'react-konva';
 import type { AnchorPosition } from '../../../../types/board';
 
@@ -62,7 +63,7 @@ const STAR_ANCHORS: { position: AnchorPosition; getXY: (w: number, h: number) =>
   { position: 'star-4', getXY: (w, h) => getStarAnchorXY(w, h, 4) },
 ];
 
-export function AnchorPoints({
+export const AnchorPoints = React.memo(function AnchorPoints({
   width,
   height,
   visible,
@@ -110,4 +111,4 @@ export function AnchorPoints({
       })}
     </>
   );
-}
+});

@@ -1,3 +1,4 @@
+import React from 'react';
 import { Rect } from 'react-konva';
 import type Konva from 'konva';
 
@@ -21,7 +22,7 @@ const CORNERS: { corner: Corner; getXY: (w: number, h: number) => { x: number; y
   { corner: 'bottom-right', getXY: (w, h) => ({ x: w, y: h }), cursor: 'nwse-resize' },
 ];
 
-export function ResizeHandles({
+export const ResizeHandles = React.memo(function ResizeHandles({
   width,
   height,
   zoomScale,
@@ -83,4 +84,4 @@ export function ResizeHandles({
       })}
     </>
   );
-}
+});

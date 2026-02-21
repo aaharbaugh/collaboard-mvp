@@ -6,11 +6,9 @@ import { useBoardSync } from '../sync/useBoardSync';
 import { useCursorSync } from '../sync/useCursorSync';
 import { useBoardViewport } from './useBoardViewport';
 import { useBoardStore } from '../../lib/store';
-import { GridLayer } from './components/GridLayer';
-import { BoardObject } from './components/BoardObject';
-import { AnchorPoints } from './components/objects/AnchorPoints';
-import { ResizeHandles } from './components/objects/ResizeHandles';
 import { ConnectionLine } from './components/ConnectionLine';
+import { MemoizedObjectGroup } from './components/MemoizedObjectGroup';
+import type { MemoizedObjectGroupHandlers } from './components/MemoizedObjectGroup';
 import {
   STICKY_NOTE_DEFAULTS,
   TEXT_DEFAULTS,
@@ -48,7 +46,12 @@ export function BoardCanvas({
   } = useBoardSync(boardId);
   const { updateCursor } = useCursorSync(boardId, userId, userName);
 
-  const { toolMode, selectedIds, setSelection } = useBoardStore();
+  const toolMode    = useBoardStore((s) => s.toolMode);
+  const selectedIds = useBoardStore((s) => s.selectedIds);
+  const setSelection = useBoardStore((s) => s.setSelection);
+
+  // Must be declared before useBoardViewport so the ref is in scope when passed
+  const stageRef = useRef<Konva.Stage>(null);
 
   const {
     viewport,
@@ -58,7 +61,7 @@ export function BoardCanvas({
     handleStageMouseUp,
     getPointerPosition,
     didPan,
-  } = useBoardViewport(containerRef, toolMode);
+  } = useBoardViewport(containerRef, toolMode, stageRef);
 
   const [selectionRect, setSelectionRect] = useState<{
     startX: number; startY: number; endX: number; endY: number;
@@ -94,6 +97,10 @@ export function BoardCanvas({
   const allObjects = useMemo(() => Object.values(objects), [objects]);
   const backObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack === true), [allObjects]);
   const frontObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack !== true), [allObjects]);
+  const connectionList = useMemo(() => Object.values(connections), [connections]);
+
+  // O(1) selection lookup — replaces O(n) selectedIds.includes() in render maps
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds]);
 
   const isMultiSelect = selectedIds.length > 1;
   /**
@@ -154,15 +161,25 @@ export function BoardCanvas({
   }, [isMultiSelect, selectedIds, objects, transformVersion]);
 
   /**
-   * Objects with live positions/rotations read directly from Konva node refs.
-   * Re-computed on every transformVersion bump (each RAF during rotation) so
-   * ConnectionLine endpoints follow the object in real-time without waiting for
-   * a Firebase round-trip. Falls back to store data for non-transformed objects.
+   * Objects with live positions/rotations, limited to connection endpoints and the
+   * active drawing source. Only these need real-time Konva node positions — rebuilding
+   * ALL objects on every rotation RAF tick was wasteful.
    */
+  const drawingFromId = drawingConnection?.fromId ?? null;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const liveObjects = useMemo(() => {
+    // Collect only the IDs we actually need live data for
+    const endpointIds = new Set<string>();
+    for (const conn of connectionList) {
+      endpointIds.add(conn.fromId);
+      endpointIds.add(conn.toId);
+    }
+    if (drawingFromId) endpointIds.add(drawingFromId);
+
     const result: Record<string, BoardObjectType> = {};
-    for (const [id, obj] of Object.entries(objects)) {
+    for (const id of endpointIds) {
+      const obj = objects[id];
+      if (!obj) continue;
       const node = objectNodeRefs.current.get(id);
       if (node) {
         result[id] = {
@@ -177,7 +194,7 @@ export function BoardCanvas({
     }
     return result;
   // objectNodeRefs.current is a mutable ref read intentionally for live Konva node state
-  }, [objects, transformVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [objects, connectionList, drawingFromId, transformVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clearSelection = useCallback(() => {
     const ids = useBoardStore.getState().selectedIds;
@@ -982,6 +999,62 @@ export function BoardCanvas({
     return () => window.removeEventListener('paste', handlePaste);
   }, [createObject, userId, viewport, width, height, setSelection]);
 
+  // ---------------------------------------------------------------------------
+  // Stable handler refs — updated every render so the wrappers below never go stale,
+  // but the wrapper references themselves NEVER change (created once via useRef).
+  // This lets MemoizedObjectGroup skip re-renders even when handler deps change.
+  // ---------------------------------------------------------------------------
+  const _latestH = useRef({
+    handleObjectClick,
+    handleObjectDoubleClick,
+    handleObjectDragStart,
+    handleObjectDragMove,
+    handleObjectDragEnd,
+    handleAnchorMouseDown,
+    handleAnchorMouseUp,
+    handleResizeStart,
+    handleResizeMove,
+    handleResizeEnd,
+    setHoveredObjectId,
+  });
+  _latestH.current = {
+    handleObjectClick,
+    handleObjectDoubleClick,
+    handleObjectDragStart,
+    handleObjectDragMove,
+    handleObjectDragEnd,
+    handleAnchorMouseDown,
+    handleAnchorMouseUp,
+    handleResizeStart,
+    handleResizeMove,
+    handleResizeEnd,
+    setHoveredObjectId,
+  };
+
+  // Stable wrappers — created once, call through _latestH.current
+  const stableHandlers = useRef<MemoizedObjectGroupHandlers | null>(null);
+  if (!stableHandlers.current) {
+    stableHandlers.current = {
+      onObjectClick:       (e, id)         => _latestH.current.handleObjectClick(e, id),
+      onObjectDoubleClick: (e, obj)        => _latestH.current.handleObjectDoubleClick(e, obj),
+      onDragStart:         (e, id)         => _latestH.current.handleObjectDragStart(e, id),
+      onDragMove:          (e, id)         => _latestH.current.handleObjectDragMove(e, id),
+      onDragEnd:           (e, id)         => _latestH.current.handleObjectDragEnd(e, id),
+      onMouseEnter:        (id)            => _latestH.current.setHoveredObjectId(id),
+      onMouseLeave:        (id)            => _latestH.current.setHoveredObjectId((prev) => prev === id ? null : prev),
+      onAnchorMouseDown:   (id, anchor)    => _latestH.current.handleAnchorMouseDown(id, anchor),
+      onAnchorMouseUp:     (id, anchor)    => _latestH.current.handleAnchorMouseUp(id, anchor),
+      onResizeStart:       (id, corner)    => _latestH.current.handleResizeStart(id, corner),
+      onResizeMove:        (id, corner, e) => _latestH.current.handleResizeMove(id, corner, e),
+      onResizeEnd:         (id, corner, e) => _latestH.current.handleResizeEnd(id, corner, e),
+      onRef: (id, node) => {
+        if (node) objectNodeRefs.current.set(id, node);
+        else objectNodeRefs.current.delete(id);
+      },
+    };
+  }
+  const sh = stableHandlers.current;
+
   // Compute the in-progress arrow points (use liveObjects so the start anchor
   // stays glued to the object edge even while that object is being rotated)
   let drawingArrowPoints: number[] | null = null;
@@ -1000,12 +1073,14 @@ export function BoardCanvas({
   return (
     <div ref={containerRef} className="board-container">
       <Stage
+        ref={stageRef}
         width={width || window.innerWidth}
         height={height || window.innerHeight}
         scaleX={viewport.scale}
         scaleY={viewport.scale}
         x={viewport.x}
         y={viewport.y}
+        hitOnDragOnly
         onWheel={handleWheel}
         onMouseDown={(e) => {
           connectionJustCompleted.current = false;
@@ -1028,87 +1103,53 @@ export function BoardCanvas({
         onTap={handleStageClick}
         style={{
           cursor: drawingConnection ? 'crosshair' : toolMode === 'move' ? 'grab' : toolMode === 'select' ? 'default' : 'crosshair',
+          willChange: 'transform', // GPU layer for smooth zoom/pan
         }}
       >
-        <GridLayer />
-
         <Layer>
           {/* Objects sent to back (behind arrows) */}
           {backObjects.map((obj) => {
-            const isSelected = selectedIds.includes(obj.id);
+            const isSelected = selectedSet.has(obj.id);
             const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
-            const showSelectionBorder = isSelected && !isMultiSelect;
-            const dragPos = frameDragPositions?.get(obj.id);
-            const cx = dragPos ? dragPos.x : obj.x + obj.width / 2;
-            const cy = dragPos ? dragPos.y : obj.y + obj.height / 2;
             return (
-              <Group
+              <MemoizedObjectGroup
                 key={obj.id}
-                ref={(node) => {
-                  if (node) objectNodeRefs.current.set(obj.id, node);
-                  else objectNodeRefs.current.delete(obj.id);
-                }}
-                x={cx}
-                y={cy}
-                offsetX={obj.width / 2}
-                offsetY={obj.height / 2}
-                rotation={obj.rotation ?? 0}
-                draggable={toolMode === 'select' && isSelected && !drawingConnection}
-                onClick={(e) => handleObjectClick(e, obj.id)}
-                onTap={(e) => handleObjectClick(e, obj.id)}
-                onDblClick={(e) => handleObjectDoubleClick(e, obj)}
-                onDblTap={(e) => handleObjectDoubleClick(e, obj)}
-                onDragStart={(e) => handleObjectDragStart(e, obj.id)}
-                onDragMove={(e) => handleObjectDragMove(e, obj.id)}
-                onDragEnd={(e) => handleObjectDragEnd(e, obj.id)}
-                onMouseEnter={() => setHoveredObjectId(obj.id)}
-                onMouseLeave={() => setHoveredObjectId((prev) => prev === obj.id ? null : prev)}
-              >
-                <BoardObject
-                  obj={{ ...obj, x: 0, y: 0 }}
-                  isSelected={isSelected}
-                  showSelectionBorder={showSelectionBorder}
-                  remoteSelectedBy={obj.selectedBy && obj.selectedBy !== userId ? (obj.selectedByName ?? undefined) : undefined}
-                  zoomScale={viewport.scale}
-                />
-                <AnchorPoints
-                  width={obj.width}
-                  height={obj.height}
-                  visible={showAnchors}
-                  zoomScale={viewport.scale}
-                  objectType={obj.type}
-                  onAnchorMouseDown={(anchor) => handleAnchorMouseDown(obj.id, anchor)}
-                  onAnchorMouseUp={(anchor) => handleAnchorMouseUp(obj.id, anchor)}
-                />
-                {isSelected && !isMultiSelect && (
-                  <ResizeHandles
-                    width={obj.width}
-                    height={obj.height}
-                    zoomScale={viewport.scale}
-                    objectType={obj.type}
-                    onResizeStart={(corner) => handleResizeStart(obj.id, corner)}
-                    onResizeMove={(corner, e) => handleResizeMove(obj.id, corner, e)}
-                    onResizeEnd={(corner, e) => handleResizeEnd(obj.id, corner, e)}
-                  />
-                )}
-              </Group>
+                obj={obj}
+                isSelected={isSelected}
+                showAnchors={showAnchors}
+                showSelectionBorder={isSelected && !isMultiSelect}
+                dragPos={frameDragPositions?.get(obj.id)}
+                toolMode={toolMode}
+                hasDrawingConnection={!!drawingConnection}
+                zoomScale={viewport.scale}
+                userId={userId}
+                isMultiSelect={isMultiSelect}
+                handlers={sh}
+              />
             );
           })}
 
-          {/* Connections (arrows) */}
-          {Object.values(connections).map((conn) => (
-            <ConnectionLine
-              key={conn.id}
-              connection={conn}
-              objects={liveObjects}
-              zoomScale={viewport.scale}
-              isSelected={selectedConnectionId === conn.id}
-              onSelect={handleConnectionSelect}
-              onWaypointDrag={handleConnectionWaypointDrag}
-              onWaypointDragEnd={handleConnectionWaypointDragEnd}
-              onDoubleClick={handleConnectionDoubleClick}
-            />
-          ))}
+          {/* Connections (arrows) — fromObj/toObj passed directly so ConnectionLine's
+              React.memo can compare endpoint geometry without touching the full liveObjects map */}
+          {connectionList.map((conn) => {
+            const fromObj = liveObjects[conn.fromId];
+            const toObj = liveObjects[conn.toId];
+            if (!fromObj || !toObj) return null;
+            return (
+              <ConnectionLine
+                key={conn.id}
+                connection={conn}
+                fromObj={fromObj}
+                toObj={toObj}
+                zoomScale={viewport.scale}
+                isSelected={selectedConnectionId === conn.id}
+                onSelect={handleConnectionSelect}
+                onWaypointDrag={handleConnectionWaypointDrag}
+                onWaypointDragEnd={handleConnectionWaypointDragEnd}
+                onDoubleClick={handleConnectionDoubleClick}
+              />
+            );
+          })}
 
           {/* In-progress drawing arrow */}
           {drawingArrowPoints && (
@@ -1127,63 +1168,23 @@ export function BoardCanvas({
 
           {/* Objects in front (above arrows) */}
           {frontObjects.map((obj) => {
-            const isSelected = selectedIds.includes(obj.id);
+            const isSelected = selectedSet.has(obj.id);
             const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
-            const showSelectionBorder = isSelected && !isMultiSelect;
-            const dragPos = frameDragPositions?.get(obj.id);
-            const cx = dragPos ? dragPos.x : obj.x + obj.width / 2;
-            const cy = dragPos ? dragPos.y : obj.y + obj.height / 2;
             return (
-              <Group
+              <MemoizedObjectGroup
                 key={obj.id}
-                ref={(node) => {
-                  if (node) objectNodeRefs.current.set(obj.id, node);
-                  else objectNodeRefs.current.delete(obj.id);
-                }}
-                x={cx}
-                y={cy}
-                offsetX={obj.width / 2}
-                offsetY={obj.height / 2}
-                rotation={obj.rotation ?? 0}
-                draggable={toolMode === 'select' && isSelected && !drawingConnection}
-                onClick={(e) => handleObjectClick(e, obj.id)}
-                onTap={(e) => handleObjectClick(e, obj.id)}
-                onDblClick={(e) => handleObjectDoubleClick(e, obj)}
-                onDblTap={(e) => handleObjectDoubleClick(e, obj)}
-                onDragStart={(e) => handleObjectDragStart(e, obj.id)}
-                onDragMove={(e) => handleObjectDragMove(e, obj.id)}
-                onDragEnd={(e) => handleObjectDragEnd(e, obj.id)}
-                onMouseEnter={() => setHoveredObjectId(obj.id)}
-                onMouseLeave={() => setHoveredObjectId((prev) => prev === obj.id ? null : prev)}
-              >
-                <BoardObject
-                  obj={{ ...obj, x: 0, y: 0 }}
-                  isSelected={isSelected}
-                  showSelectionBorder={showSelectionBorder}
-                  remoteSelectedBy={obj.selectedBy && obj.selectedBy !== userId ? (obj.selectedByName ?? undefined) : undefined}
-                  zoomScale={viewport.scale}
-                />
-                <AnchorPoints
-                  width={obj.width}
-                  height={obj.height}
-                  visible={showAnchors}
-                  zoomScale={viewport.scale}
-                  objectType={obj.type}
-                  onAnchorMouseDown={(anchor) => handleAnchorMouseDown(obj.id, anchor)}
-                  onAnchorMouseUp={(anchor) => handleAnchorMouseUp(obj.id, anchor)}
-                />
-                {isSelected && !isMultiSelect && (
-                  <ResizeHandles
-                    width={obj.width}
-                    height={obj.height}
-                    zoomScale={viewport.scale}
-                    objectType={obj.type}
-                    onResizeStart={(corner) => handleResizeStart(obj.id, corner)}
-                    onResizeMove={(corner, e) => handleResizeMove(obj.id, corner, e)}
-                    onResizeEnd={(corner, e) => handleResizeEnd(obj.id, corner, e)}
-                  />
-                )}
-              </Group>
+                obj={obj}
+                isSelected={isSelected}
+                showAnchors={showAnchors}
+                showSelectionBorder={isSelected && !isMultiSelect}
+                dragPos={frameDragPositions?.get(obj.id)}
+                toolMode={toolMode}
+                hasDrawingConnection={!!drawingConnection}
+                zoomScale={viewport.scale}
+                userId={userId}
+                isMultiSelect={isMultiSelect}
+                handlers={sh}
+              />
             );
           })}
 
