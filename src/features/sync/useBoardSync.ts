@@ -139,14 +139,24 @@ export function useBoardSync(boardId: string | null) {
     (id: string, updates: Partial<BoardObject>) => {
       if (!boardId) return;
       const payload: Record<string, unknown> = {};
+      const optimistic: Partial<BoardObject> = {};
       for (const [key, value] of Object.entries(updates)) {
         if (value !== undefined) {
           payload[key] = value;
+          (optimistic as Record<string, unknown>)[key] = value;
         } else if (CLEARABLE_OBJECT_KEYS.has(key)) {
           payload[key] = null;
+          (optimistic as Record<string, unknown>)[key] = null;
         }
       }
       if (Object.keys(payload).length === 0) return;
+      // Optimistic local update so UI doesn't re-render again when Firebase sync returns
+      setObjects((prev) => {
+        if (!prev[id]) return prev;
+        const next = { ...prev[id], ...optimistic } as BoardObject;
+        if (!hasObjectChanged(prev[id], next)) return prev;
+        return { ...prev, [id]: next };
+      });
       update(
         ref(database, `boards/${boardId}/objects/${id}`),
         payload

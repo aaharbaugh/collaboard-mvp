@@ -24,6 +24,11 @@ export const STICKY_NOTE_DEFAULTS = {
 /** Skip rendering text when box is smaller than this in screen px (avoids pointless draw). Text scales from 0 with zoom. */
 export const MIN_RENDER_SCREEN_PX = 0.5;
 
+/** Minimum font size in screen px so text stays readable in edit and rendered modes (avoids auto-fit shrinking too small). */
+export const MIN_READABLE_FONT_SCREEN_PX = 16;
+/** Floor font size in screen px when min doesn't fit; we use this if it still fits so text isn't tiny. */
+export const FLOOR_READABLE_FONT_SCREEN_PX = 12;
+
 /** Default size for standalone text element (heading-style). */
 export const TEXT_DEFAULTS = {
   width: 240,

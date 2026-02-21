@@ -74,9 +74,10 @@ function parseRequestedCount(command: string): number | null {
     two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8,
     nine: 9, ten: 10, eleven: 11, twelve: 12, fifteen: 15, twenty: 20,
   };
-  // Numeric digit followed by an optional count-noun (idea, branch, topic, node, item…)
+  // Numeric digit followed by an optional count-noun (idea, branch/branches, topic, node, item…)
+  // Use (?:branch(?:es)?) etc. so "branches" matches as one word and \b succeeds (plain "branch"s? leaves "es" and no word boundary).
   const digitMatch = command.match(
-    /\b(\d+)\s*(?:idea|branch|topic|node|item|point|concept|sub.?topic|thing|child|question|category|section)s?\b/i,
+    /\b(\d+)\s*(?:idea(?:s)?|branch(?:es)?|topic(?:s)?|node(?:s)?|item(?:s)?|point(?:s)?|concept(?:s)?|sub.?topic(?:s)?|thing(?:s)?|child(?:ren)?|question(?:s)?|category|categories|section(?:s)?)\b/i,
   );
   if (digitMatch) {
     const n = parseInt(digitMatch[1], 10);
@@ -362,8 +363,8 @@ async function executeMindmap(
 ): Promise<TemplateResult> {
   await agentTools.writeAgentStatus(ctx.boardId, { phase: 'thinking', iteration: 1, maxIterations: 1 });
 
-  // Respect explicit count requests ("5 ideas", "ten branches", etc.); default 5, cap at 16
-  const requestedCount = parseRequestedCount(command) ?? 5;
+  // Respect explicit count requests ("5 ideas", "ten branches", etc.); default 4 for mind map (matches "central idea and 4 branches"), cap at 16
+  const requestedCount = parseRequestedCount(command) ?? 4;
   const branchCount = Math.min(Math.max(requestedCount, 2), 16);
 
   type MindmapContent = { center: string; branches: Array<{ label: string; children?: string[] }> };

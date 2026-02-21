@@ -1,7 +1,7 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
-import { parseLines, computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX, MIN_READABLE_FONT_SCREEN_PX, FLOOR_READABLE_FONT_SCREEN_PX } from '../../../../lib/constants';
+import { computeTextLayout, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
 
 interface StickyNoteProps {
   obj: BoardObject;
@@ -23,28 +23,31 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const rawText = obj.text ?? '';
   const w = Math.max(0, obj.width);
   const h = Math.max(0, obj.height);
-
-  // World-space only: text scales with zoom from 0; no minimum readability
-  const { fontSize, padding } = computeAutoFitFontSize(
-    rawText,
-    Math.max(1, w),
-    Math.max(1, h),
-  );
   const scale = Math.max(1e-10, zoomScale);
   const screenW = w * scale;
   const screenH = h * scale;
-  // Only render text when box is at least MIN_RENDER_SCREEN_PX on screen (avoid pointless draw)
-  const bigEnoughToRender = screenW >= MIN_RENDER_SCREEN_PX && screenH >= MIN_RENDER_SCREEN_PX && fontSize >= 0.5;
 
-  const availW = Math.max(1, w - padding * 2);
-  const availH = Math.max(1, h - padding * 2);
-  const parsed = parseLines(rawText);
-  const displayText = parsed.map((l) => l.text).join('\n');
-  const wrappedLines = getWrappedLines(displayText, availW, fontSize);
+  const layout = computeTextLayout(
+    rawText,
+    Math.max(1, w),
+    Math.max(1, h),
+    {
+      minFontSize: MIN_READABLE_FONT_SCREEN_PX / scale,
+      floorFontSize: FLOOR_READABLE_FONT_SCREEN_PX / scale,
+    },
+  );
+  const { fontSize, padding, wrappedLines } = layout;
   const lineHeight = fontSize * LINE_HEIGHT_RATIO;
-  const maxLinesThatFit = lineHeight > 0 ? Math.max(1, Math.floor(availH / lineHeight)) : 1;
+  const availH = Math.max(1, h - padding * 2);
+  // Use small tolerance so we don't drop the last line to floating-point (layout already fits all)
+  const maxLinesThatFit =
+    lineHeight > 0
+      ? Math.min(wrappedLines.length, Math.max(1, Math.floor((availH + 0.5) / lineHeight)))
+      : wrappedLines.length;
   const visibleLines = wrappedLines.slice(0, maxLinesThatFit);
-  const hasContent = displayText.length > 0;
+
+  const bigEnoughToRender = screenW >= MIN_RENDER_SCREEN_PX && screenH >= MIN_RENDER_SCREEN_PX && fontSize >= 0.5;
+  const hasContent = rawText.length > 0;
   const showText = bigEnoughToRender && w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
 
   return (
@@ -73,11 +76,12 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
               key={i}
               x={padding}
               y={padding + i * lineHeight}
-              width={availW}
+              width={Math.max(1, w - padding * 2)}
               text={lineText}
               fontSize={fontSize}
               fontFamily='"Courier New", Courier, monospace'
               fill="#2c2416"
+              wrap="none"
               listening={false}
             />
           ))}

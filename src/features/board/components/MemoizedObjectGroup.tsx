@@ -52,8 +52,23 @@ interface MemoizedObjectGroupProps {
 }
 
 function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps): boolean {
-  // Geometry & content
-  const a = prev.obj, b = next.obj;
+  // Fast path: same object ref and same selection/hover → skip full compare (avoids re-render on other objects’ click)
+  if (
+    prev.obj === next.obj &&
+    prev.isSelected === next.isSelected &&
+    prev.showAnchors === next.showAnchors &&
+    prev.showSelectionBorder === next.showSelectionBorder &&
+    prev.dragPos === next.dragPos &&
+    prev.toolMode === next.toolMode &&
+    prev.hasDrawingConnection === next.hasDrawingConnection &&
+    prev.isMultiSelect === next.isMultiSelect &&
+    prev.zoomScale === next.zoomScale
+  ) {
+    return true;
+  }
+  // Geometry & content (when ref changed or selection/ui state changed)
+  const a = prev.obj,
+    b = next.obj;
   if (a.x !== b.x || a.y !== b.y) return false;
   if (a.width !== b.width || a.height !== b.height) return false;
   if ((a.rotation ?? 0) !== (b.rotation ?? 0)) return false;
@@ -62,7 +77,6 @@ function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps
   if (a.type !== b.type) return false;
   if (a.selectedBy !== b.selectedBy) return false;
   if (a.frameId !== b.frameId) return false;
-  // Selection / interaction state
   if (prev.isSelected !== next.isSelected) return false;
   if (prev.showAnchors !== next.showAnchors) return false;
   if (prev.showSelectionBorder !== next.showSelectionBorder) return false;
@@ -70,7 +84,7 @@ function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps
   if (prev.toolMode !== next.toolMode) return false;
   if (prev.hasDrawingConnection !== next.hasDrawingConnection) return false;
   if (prev.isMultiSelect !== next.isMultiSelect) return false;
-  // handlers: always same stable reference — intentionally NOT checked
+  if (prev.zoomScale !== next.zoomScale) return false;
   return true;
 }
 

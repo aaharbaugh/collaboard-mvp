@@ -1751,7 +1751,6 @@ export async function arrangeWithin(
 
   // Interior available space (inside padding, below title bar)
   const innerW = cw - pad * 2;
-  const innerH = ch - pad * 2 - titleOffset;
 
   // Columns: how many items fit in a row
   let cols: number;

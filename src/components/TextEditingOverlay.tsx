@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { BoardObject } from '../types/board';
-import { computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../lib/textParser';
+import { computeTextLayout } from '../lib/textParser';
+import { MIN_READABLE_FONT_SCREEN_PX, FLOOR_READABLE_FONT_SCREEN_PX } from '../lib/constants';
 
 const DRAFT_PERSIST_DEBOUNCE_MS = 400;
 
@@ -169,21 +170,14 @@ export function TextEditingOverlay({
   }
 
   const minScreenDim = Math.min(screenW, screenH);
-  const { fontSize: rawFontSize, padding: rawPadding } = computeAutoFitFontSize(
+  const layout = computeTextLayout(
     text,
     Math.max(1, screenW),
     Math.max(1, screenH),
+    { minFontSize: MIN_READABLE_FONT_SCREEN_PX, floorFontSize: FLOOR_READABLE_FONT_SCREEN_PX },
   );
-  let screenFontSize = Number.isFinite(rawFontSize) && rawFontSize > 0 ? rawFontSize : minScreenDim * 0.1;
-  const screenPadding = Number.isFinite(rawPadding) && rawPadding >= 0 ? rawPadding : minScreenDim * 0.06;
-  const availW = Math.max(1, screenW - screenPadding * 2);
-  const availH = Math.max(1, screenH - screenPadding * 2);
-  const wrapped = getWrappedLines(text, availW, screenFontSize);
-  const lineCount = Math.max(1, wrapped.length);
-  const maxFontForHeight = availH / (lineCount * LINE_HEIGHT_RATIO);
-  if (screenFontSize > maxFontForHeight) {
-    screenFontSize = Math.max(1, maxFontForHeight);
-  }
+  const screenFontSize = layout.fontSize;
+  const screenPadding = layout.padding;
 
   if (!Number.isFinite(screenW) || !Number.isFinite(screenH) || screenW < 1 || screenH < 1) {
     return null;
@@ -233,7 +227,7 @@ export function TextEditingOverlay({
       }}
     >
       <textarea
-        ref={inputRef}
+        ref={inputRef as React.RefObject<HTMLTextAreaElement>}
         className="text-editing-input"
         value={text}
         onChange={(e) => {

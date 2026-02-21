@@ -381,21 +381,26 @@ export function BoardCanvas({
   const handleObjectDragStart = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
       const currentSelectedIds = useBoardStore.getState().selectedIds;
-      if (!currentSelectedIds.includes(id)) return;
+      const isSelected = currentSelectedIds.includes(id);
       const draggedObj = objects[id];
-      // Snapshot start center positions (groups use center for position when rotating)
+      // Snapshot start center positions (groups use center for position when rotating).
+      // Always record at least the dragged object so the undo entry is never empty,
+      // even when the object wasn't selected before the drag began.
       const positions = new Map<string, { x: number; y: number }>();
-      currentSelectedIds.forEach((sid) => {
-        const obj = objects[sid];
-        if (obj) positions.set(sid, { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 });
-      });
-      if (draggedObj?.type === 'frame') {
-        allObjects.forEach((obj) => {
-          if (obj.frameId === id && !positions.has(obj.id)) {
-            positions.set(obj.id, { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 });
-          }
+      if (isSelected) {
+        currentSelectedIds.forEach((sid) => {
+          const obj = objects[sid];
+          if (obj) positions.set(sid, { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 });
         });
+        if (draggedObj?.type === 'frame') {
+          allObjects.forEach((obj) => {
+            if (obj.frameId === id && !positions.has(obj.id)) {
+              positions.set(obj.id, { x: obj.x + obj.width / 2, y: obj.y + obj.height / 2 });
+            }
+          });
+        }
       }
+      // Override with the Konva node's actual position (most accurate start point)
       positions.set(id, { x: e.target.x(), y: e.target.y() });
       // Use actual node positions when refs exist so we stay in sync with what's on screen (avoids store/Firebase lag)
       positions.forEach((_pos, sid) => {
@@ -403,6 +408,8 @@ export function BoardCanvas({
         if (node) positions.set(sid, { x: node.x(), y: node.y() });
       });
       groupDragStartPositions.current = positions;
+      // Frame-drag visual tracking only applies when the frame itself is selected
+      if (!isSelected) return;
       const isFrameDrag = draggedObj?.type === 'frame';
       frameDragFrameIdRef.current = isFrameDrag ? id : null;
       if (isFrameDrag) {
@@ -453,6 +460,12 @@ export function BoardCanvas({
   const handleObjectDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
       const startPositions = groupDragStartPositions.current;
+      // In a multi-select drag, Konva fires dragend for every selected draggable node,
+      // not just the one the user grabbed. The first dragend (the grabbed object) handles
+      // all objects and clears the map. Subsequent dragends for sibling objects find
+      // their id absent from the map — bail out to avoid duplicate Firebase writes and
+      // no-op undo entries being stacked on top of the real one.
+      if (!startPositions.has(id)) return;
       // Snapshot start positions before they're cleared (center coords)
       const posSnapshot = new Map(startPositions);
 
@@ -540,8 +553,9 @@ export function BoardCanvas({
           updateObject(id, { x: newX, y: newY });
         }
       }
-      // Push undo entry: restore all objects to their pre-drag positions
-      // posSnapshot holds center coords; convert to top-left for updateObject
+      // Push undo entry: restore all objects to their pre-drag positions and frame membership.
+      // posSnapshot holds center coords; convert to top-left for updateObject.
+      // frozenObjects captures the Firebase state before the drag (updateObject is async).
       const frozenObjects = objects;
       pushUndo({
         description: 'Move objects',
@@ -552,6 +566,7 @@ export function BoardCanvas({
             updateObject(sid, {
               x: startPos.x - obj.width / 2,
               y: startPos.y - obj.height / 2,
+              frameId: obj.frameId,
             });
           });
         },
