@@ -104,6 +104,51 @@ export interface CreateDiagramArgs {
   anchorY?: number;
 }
 
+export type CreateManyLayout =
+  | 'grid' | 'row' | 'column' | 'circle'
+  | 'x_pattern'   // two diagonals crossing (letter X)
+  | 'cross'       // horizontal + vertical bar (plus sign)
+  | 'diamond'     // filled diamond / rhombus
+  | 'triangle';   // staircase triangle (1-2-3-4... rows)
+
+export interface CreateManyArgs {
+  /** Object type to create (all N copies will be the same type). */
+  objectType: 'stickyNote' | 'rectangle' | 'circle' | 'star';
+  /** Number of objects to create (1–200). */
+  count: number;
+  /** How to lay objects out. Server computes all coordinates — never supply x/y per item. */
+  layout: CreateManyLayout;
+  /** Top-left anchor (absolute world coords) — ignored when containerId is set. */
+  anchorX?: number;
+  anchorY?: number;
+  /** Per-item dimensions (px). Defaults: stickyNote 160×120, shapes 100×80. */
+  itemWidth?: number;
+  itemHeight?: number;
+  /** Gap between items in px (default 10). */
+  gap?: number;
+  /** Color name or hex. */
+  color?: string;
+  /** Text for sticky notes (same text on all copies, or leave blank). */
+  text?: string;
+  /** If set, pack all items inside this container and resize it if they don't fit. */
+  containerId?: string;
+}
+
+export interface ArrangeWithinArgs {
+  /** Firebase IDs of the objects to arrange (do NOT include containerId). */
+  objectIds: string[];
+  /** Firebase ID of the container (frame, sticky note, or shape) to pack inside. */
+  containerId: string;
+  /** Layout within container (default 'grid'). */
+  layout?: 'grid' | 'row' | 'column';
+  /** Gap between items in px (default 8). */
+  gap?: number;
+  /** Resize the container to fit all items if they don't fit (default true). */
+  resizeToFit?: boolean;
+  /** Also set frameId on each item so they belong to the frame (default false). */
+  addToFrame?: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -1440,6 +1485,323 @@ export async function rotateObject(
   rotation: number
 ): Promise<void> {
   await admin.database().ref(`boards/${boardId}/objects/${objectId}`).update({ rotation });
+}
+
+// ---------------------------------------------------------------------------
+// createMany — server-computed bulk creation
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute N (x,y) positions for a given layout strategy.
+ * All positions are relative to origin (0,0) — the caller offsets them to center on the viewport.
+ */
+function computeLayoutPositions(
+  layout: CreateManyLayout,
+  count: number,
+  itemW: number,
+  itemH: number,
+  gap: number,
+): Array<{ x: number; y: number }> {
+  const sw = itemW + gap;
+  const sh = itemH + gap;
+  const pts: Array<{ x: number; y: number }> = [];
+
+  switch (layout) {
+    case 'grid': {
+      const cols = Math.ceil(Math.sqrt(count));
+      for (let i = 0; i < count; i++) {
+        pts.push({ x: (i % cols) * sw, y: Math.floor(i / cols) * sh });
+      }
+      break;
+    }
+    case 'row': {
+      for (let i = 0; i < count; i++) pts.push({ x: i * sw, y: 0 });
+      break;
+    }
+    case 'column': {
+      for (let i = 0; i < count; i++) pts.push({ x: 0, y: i * sh });
+      break;
+    }
+    case 'circle': {
+      const radius = Math.max(150, Math.ceil((count * (Math.max(itemW, itemH) + gap)) / (2 * Math.PI)));
+      for (let i = 0; i < count; i++) {
+        const angle = (i / count) * 2 * Math.PI - Math.PI / 2;
+        pts.push({
+          x: Math.round(radius + radius * Math.cos(angle) - itemW / 2),
+          y: Math.round(radius + radius * Math.sin(angle) - itemH / 2),
+        });
+      }
+      break;
+    }
+    case 'x_pattern': {
+      // Two crossing diagonals. Arm length N = ceil((count+1)/2).
+      const N = Math.max(2, Math.ceil((count + 1) / 2));
+      const seen = new Set<string>();
+      for (let i = 0; i < N && pts.length < count; i++) {
+        const k1 = `${i},${i}`;
+        if (!seen.has(k1)) { seen.add(k1); pts.push({ x: i * sw, y: i * sh }); }
+        const k2 = `${N - 1 - i},${i}`;
+        if (!seen.has(k2)) { seen.add(k2); pts.push({ x: (N - 1 - i) * sw, y: i * sh }); }
+      }
+      break;
+    }
+    case 'cross': {
+      // Plus sign: horizontal + vertical bar crossing at center.
+      const N = Math.max(2, Math.ceil((count + 3) / 4)); // arm count (including center)
+      const total = 2 * N - 1;
+      const center = (N - 1) * sw;
+      const seen = new Set<string>();
+      for (let i = 0; i < total && pts.length < count; i++) {
+        const hk = `h${i}`;
+        if (!seen.has(hk)) { seen.add(hk); pts.push({ x: i * sw, y: center }); }
+      }
+      for (let j = 0; j < total && pts.length < count; j++) {
+        const vk = `v${j}`;
+        if (j === N - 1) continue; // center already added by horizontal pass
+        if (!seen.has(vk)) { seen.add(vk); pts.push({ x: center, y: j * sh }); }
+      }
+      break;
+    }
+    case 'diamond': {
+      // Filled diamond: all (col,row) cells where taxicab distance from center ≤ R.
+      const R = Math.max(1, Math.round(Math.sqrt(count / 2)));
+      for (let row = -R; row <= R && pts.length < count; row++) {
+        const span = R - Math.abs(row);
+        for (let col = -span; col <= span && pts.length < count; col++) {
+          pts.push({ x: (R + col) * sw, y: (R + row) * sh });
+        }
+      }
+      break;
+    }
+    case 'triangle': {
+      // Staircase triangle: row r has r+1 items, centered within the widest row.
+      const N = Math.ceil((-1 + Math.sqrt(1 + 8 * count)) / 2); // rows needed
+      let remaining = count;
+      for (let r = 0; r < N && remaining > 0; r++) {
+        const items = Math.min(r + 1, remaining);
+        const offsetX = Math.round(((N - 1) - r) / 2); // center row within base
+        for (let c = 0; c < items; c++) {
+          pts.push({ x: (offsetX + c) * sw, y: r * sh });
+        }
+        remaining -= items;
+      }
+      break;
+    }
+  }
+  return pts.slice(0, count);
+}
+
+/** Offset a set of positions so their bounding box is centered at (cx, cy). */
+function centerPositions(
+  pts: Array<{ x: number; y: number }>,
+  itemW: number,
+  itemH: number,
+  cx: number,
+  cy: number,
+): Array<{ x: number; y: number }> {
+  if (pts.length === 0) return pts;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of pts) {
+    minX = Math.min(minX, p.x); minY = Math.min(minY, p.y);
+    maxX = Math.max(maxX, p.x + itemW); maxY = Math.max(maxY, p.y + itemH);
+  }
+  const dx = Math.round(cx - (minX + maxX) / 2);
+  const dy = Math.round(cy - (minY + maxY) / 2);
+  return pts.map(p => ({ x: p.x + dx, y: p.y + dy }));
+}
+
+/**
+ * Create N identical objects in one Firebase write.
+ * The server computes all positions — the LLM only needs to specify count, layout, and anchor.
+ * If containerId is set, items are packed inside that container (and it is resized if needed).
+ */
+export async function createMany(
+  boardId: string,
+  args: CreateManyArgs,
+  userId: string,
+  cache?: ObjectCache,
+): Promise<{ objectIds: string[] }> {
+  const count = Math.min(Math.max(Math.round(args.count), 1), 200);
+  const defaultW = args.objectType === 'stickyNote' ? 160 : 100;
+  const defaultH = args.objectType === 'stickyNote' ? 120 : (args.objectType === 'circle' ? 100 : 80);
+  const itemW = args.itemWidth ?? defaultW;
+  const itemH = args.itemHeight ?? defaultH;
+  const gap   = args.gap ?? 10;
+  const color = mapColorNameToHex(args.color ?? (args.objectType === 'stickyNote' ? 'yellow' : 'blue'));
+  const now   = Date.now();
+
+  let positions: Array<{ x: number; y: number }>;
+
+  if (args.containerId) {
+    // Pack inside container, resize if needed
+    const snap = await admin.database().ref(`boards/${boardId}/objects/${args.containerId}`).once('value');
+    const container = snap.val() as Record<string, unknown> | null;
+    if (!container) throw new Error(`Container ${args.containerId} not found`);
+
+    const cx = Number(container['x'] ?? 0);
+    const cy = Number(container['y'] ?? 0);
+    let cw   = Number(container['width'] ?? 320);
+    let ch   = Number(container['height'] ?? 220);
+    const pad = 20;
+
+    let cols = Math.max(1, Math.floor((cw - pad * 2 + gap) / (itemW + gap)));
+    let rows = Math.ceil(count / cols);
+    const neededW = cols * (itemW + gap) - gap + pad * 2;
+    const neededH = rows * (itemH + gap) - gap + pad * 2;
+
+    if (neededH > ch || neededW > cw) {
+      cw = Math.max(cw, neededW);
+      ch = neededH;
+      await admin.database().ref(`boards/${boardId}/objects/${args.containerId}`).update({ width: cw, height: ch });
+      cols = Math.max(1, Math.floor((cw - pad * 2 + gap) / (itemW + gap)));
+      rows = Math.ceil(count / cols);
+    }
+
+    positions = [];
+    for (let i = 0; i < count; i++) {
+      positions.push({
+        x: cx + pad + (i % cols) * (itemW + gap),
+        y: cy + pad + Math.floor(i / cols) * (itemH + gap),
+      });
+    }
+  } else {
+    // Compute positions at origin, then center on the provided anchor (viewport center)
+    const rawPts = computeLayoutPositions(args.layout, count, itemW, itemH, gap);
+    const anchorCx = args.anchorX ?? 500;
+    const anchorCy = args.anchorY ?? 400;
+    positions = centerPositions(rawPts, itemW, itemH, anchorCx, anchorCy);
+  }
+
+  const updates: Record<string, unknown> = {};
+  const objectIds: string[] = [];
+
+  for (let i = 0; i < count; i++) {
+    const id = randomUUID();
+    const { x, y } = positions[i];
+    let obj: Record<string, unknown>;
+
+    if (args.objectType === 'stickyNote') {
+      obj = { id, type: 'stickyNote', text: args.text ?? '', x, y, width: itemW, height: itemH, color, createdBy: userId, createdAt: now + i };
+    } else {
+      obj = { id, type: args.objectType, x, y, width: itemW, height: itemH, color, createdBy: userId, createdAt: now + i };
+    }
+
+    updates[`boards/${boardId}/objects/${id}`] = obj;
+    cache?.set(id, { x, y, width: itemW, height: itemH });
+    objectIds.push(id);
+  }
+
+  await admin.database().ref().update(updates);
+  return { objectIds };
+}
+
+// ---------------------------------------------------------------------------
+// arrangeWithin — server-computed packing of existing objects into a container
+// ---------------------------------------------------------------------------
+
+/**
+ * Move existing objects into a tight grid inside a container.
+ * Reads actual item dimensions from Firebase, computes all positions server-side,
+ * centers the grid within the available interior, and resizes the container if needed.
+ */
+export async function arrangeWithin(
+  boardId: string,
+  args: ArrangeWithinArgs,
+): Promise<{ moves: number; resized: boolean }> {
+  // Fetch container + all items in one parallel batch
+  const [containerSnap, ...itemSnaps] = await Promise.all([
+    admin.database().ref(`boards/${boardId}/objects/${args.containerId}`).once('value'),
+    ...args.objectIds.map(id =>
+      admin.database().ref(`boards/${boardId}/objects/${id}`).once('value')
+    ),
+  ]);
+
+  const container = containerSnap.val() as Record<string, unknown> | null;
+  if (!container) throw new Error(`Container ${args.containerId} not found`);
+
+  // Pair each objectId with its data — preserves index alignment (no filter-shift bug)
+  const rawItems = itemSnaps.map(s => s.val() as Record<string, unknown> | null);
+  const validPairs = args.objectIds
+    .map((id, i) => ({ id, data: rawItems[i] }))
+    .filter((p): p is { id: string; data: Record<string, unknown> } => p.data !== null);
+
+  const count = validPairs.length;
+  if (count === 0) return { moves: 0, resized: false };
+
+  const cx  = Number(container['x'] ?? 0);
+  const cy  = Number(container['y'] ?? 0);
+  let cw    = Number(container['width']  ?? 320);
+  let ch    = Number(container['height'] ?? 220);
+  const gap    = args.gap ?? 8;
+  const layout = args.layout ?? 'grid';
+  const pad    = 20;
+
+  // Frames render a title bar that consumes the top ~50 px of their bounding box.
+  // Offset items downward so they don't overlap the title.
+  const isFrame    = String(container['type'] ?? '') === 'frame';
+  const titleOffset = isFrame ? 50 : 0;
+
+  // Average item dimensions (used for spacing; works best when items are uniform)
+  const avgW = Math.round(
+    validPairs.reduce((s, p) => s + Number(p.data['width']  ?? 80), 0) / count
+  );
+  const avgH = Math.round(
+    validPairs.reduce((s, p) => s + Number(p.data['height'] ?? 80), 0) / count
+  );
+
+  // Interior available space (inside padding, below title bar)
+  const innerW = cw - pad * 2;
+  const innerH = ch - pad * 2 - titleOffset;
+
+  // Columns: how many items fit in a row
+  let cols: number;
+  if      (layout === 'row')    { cols = count; }
+  else if (layout === 'column') { cols = 1; }
+  else { cols = Math.max(1, Math.floor((innerW + gap) / (avgW + gap))); }
+
+  const rows  = Math.ceil(count / cols);
+  // Pixel footprint of the grid content (no trailing gap)
+  const gridW = cols * (avgW + gap) - gap;
+  const gridH = rows * (avgH + gap) - gap;
+
+  // Minimum container dimensions to contain the grid with padding on all sides
+  const minCW = gridW + pad * 2;
+  const minCH = gridH + pad * 2 + titleOffset;
+
+  let resized = false;
+  if ((args.resizeToFit !== false) && (cw < minCW || ch < minCH)) {
+    cw = Math.max(cw, minCW);
+    ch = Math.max(ch, minCH);
+    await admin.database()
+      .ref(`boards/${boardId}/objects/${args.containerId}`)
+      .update({ width: cw, height: ch });
+    resized = true;
+    // Recompute cols if container grew wider than originally planned
+    if (layout === 'grid') {
+      cols = Math.max(1, Math.floor((cw - pad * 2 + gap) / (avgW + gap)));
+    }
+  }
+
+  // Center the grid within the container interior
+  const startX = cx + Math.round((cw - gridW) / 2);
+  const startY = cy + titleOffset + Math.round((ch - titleOffset - gridH) / 2);
+
+  const updates: Record<string, unknown> = {};
+  for (let i = 0; i < validPairs.length; i++) {
+    const col = layout === 'column' ? 0 : i % cols;
+    const row = layout === 'row'    ? 0 : Math.floor(i / cols);
+    updates[`boards/${boardId}/objects/${validPairs[i].id}/x`] = startX + col * (avgW + gap);
+    updates[`boards/${boardId}/objects/${validPairs[i].id}/y`] = startY + row * (avgH + gap);
+    if (args.addToFrame) {
+      updates[`boards/${boardId}/objects/${validPairs[i].id}/frameId`] = args.containerId;
+    }
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await admin.database().ref().update(updates);
+  }
+
+  return { moves: validPairs.length, resized };
 }
 
 // ---------------------------------------------------------------------------

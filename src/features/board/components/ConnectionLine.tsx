@@ -2,6 +2,7 @@ import React from 'react';
 import { Group, Arrow, Circle } from 'react-konva';
 import type Konva from 'konva';
 import type { Connection, BoardObject } from '../../../types/board';
+import { CONNECTION_DEFAULT_COLOR } from '../../../lib/constants';
 import { getAnchorWorldPoint } from '../utils/anchorPoint';
 
 interface ConnectionLineProps {
@@ -129,8 +130,8 @@ export const ConnectionLine = React.memo(function ConnectionLine({
       <Arrow
         points={allPoints}
         tension={0}
-        stroke={isSelected ? '#4a7c59' : (connection.color ?? '#6b5d4d')}
-        fill={isSelected ? '#4a7c59' : (connection.color ?? '#6b5d4d')}
+        stroke={isSelected ? '#4a7c59' : (connection.color ?? CONNECTION_DEFAULT_COLOR)}
+        fill={isSelected ? '#4a7c59' : (connection.color ?? CONNECTION_DEFAULT_COLOR)}
         strokeWidth={sw}
         pointerLength={destinationTiny ? 0 : ptrLen}
         pointerWidth={destinationTiny ? 0 : ptrW}

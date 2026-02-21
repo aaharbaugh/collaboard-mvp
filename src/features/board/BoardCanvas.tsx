@@ -49,6 +49,7 @@ export function BoardCanvas({
   const toolMode    = useBoardStore((s) => s.toolMode);
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const setSelection = useBoardStore((s) => s.setSelection);
+  const pushUndo    = useBoardStore((s) => s.pushUndo);
 
   // Must be declared before useBoardViewport so the ref is in scope when passed
   const stageRef = useRef<Konva.Stage>(null);
@@ -265,62 +266,75 @@ export function BoardCanvas({
         };
 
         if (toolMode === 'stickyNote') {
-          createObject({
+          const obj = {
             ...base,
-            type: 'stickyNote',
+            type: 'stickyNote' as const,
             width: STICKY_NOTE_DEFAULTS.width / scale,
             height: STICKY_NOTE_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.stickyNote,
             text: 'New note',
-          });
+          };
+          createObject(obj);
+          pushUndo({ description: 'Create sticky note', undo: () => deleteObject(obj.id) });
         } else if (toolMode === 'text') {
-          createObject({
+          const obj = {
             ...base,
-            type: 'text',
+            type: 'text' as const,
             width: TEXT_DEFAULTS.width / scale,
             height: TEXT_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.text,
             text: 'Text',
             headingLevel: 1,
-          });
+          };
+          createObject(obj);
+          pushUndo({ description: 'Create text', undo: () => deleteObject(obj.id) });
         } else if (toolMode === 'rectangle') {
-          createObject({
+          const obj = {
             ...base,
-            type: 'rectangle',
+            type: 'rectangle' as const,
             width: SHAPE_DEFAULTS.width / scale,
             height: SHAPE_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.rectangle,
-          });
+          };
+          createObject(obj);
+          pushUndo({ description: 'Create rectangle', undo: () => deleteObject(obj.id) });
         } else if (toolMode === 'circle') {
-          createObject({
+          const obj = {
             ...base,
-            type: 'circle',
+            type: 'circle' as const,
             width: SHAPE_DEFAULTS.width / scale,
             height: SHAPE_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.circle,
-          });
+          };
+          createObject(obj);
+          pushUndo({ description: 'Create circle', undo: () => deleteObject(obj.id) });
         } else if (toolMode === 'star') {
-          createObject({
+          const obj = {
             ...base,
-            type: 'star',
+            type: 'star' as const,
             width: SHAPE_DEFAULTS.width / scale,
             height: SHAPE_DEFAULTS.height / scale,
             color: DEFAULT_OBJECT_COLORS.star,
-          });
+          };
+          createObject(obj);
+          pushUndo({ description: 'Create star', undo: () => deleteObject(obj.id) });
         } else if (toolMode === 'frame') {
-          createObject({
+          const obj = {
             ...base,
-            type: 'frame',
+            type: 'frame' as const,
             width: FRAME_DEFAULTS.width / scale,
             height: FRAME_DEFAULTS.height / scale,
-          });
+            text: 'Frame',
+          };
+          createObject(obj);
+          pushUndo({ description: 'Create frame', undo: () => deleteObject(obj.id) });
         }
         updateObject(id, { selectedBy: userId, selectedByName: userName });
         setSelection([id]);
         useBoardStore.getState().setToolMode('select');
       }
     },
-    [toolMode, createObject, userId, userName, getPointerPosition, setSelection, clearSelection, updateObject, viewport.scale, didPan, drawingConnection]
+    [toolMode, createObject, deleteObject, pushUndo, userId, userName, getPointerPosition, setSelection, clearSelection, updateObject, viewport.scale, didPan, drawingConnection]
   );
 
   const handleObjectClick = useCallback(
@@ -357,7 +371,7 @@ export function BoardCanvas({
   const handleObjectDoubleClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>, obj: BoardObjectType) => {
       e.cancelBubble = true;
-      if (obj.type === 'stickyNote' || obj.type === 'text') {
+      if (obj.type === 'stickyNote' || obj.type === 'text' || obj.type === 'frame') {
         onStickyNoteDoubleClick?.(obj.id);
       }
     },
@@ -439,6 +453,9 @@ export function BoardCanvas({
   const handleObjectDragEnd = useCallback(
     (e: Konva.KonvaEventObject<DragEvent>, id: string) => {
       const startPositions = groupDragStartPositions.current;
+      // Snapshot start positions before they're cleared (center coords)
+      const posSnapshot = new Map(startPositions);
+
       const dx = startPositions.get(id)
         ? e.target.x() - startPositions.get(id)!.x
         : 0;
@@ -523,6 +540,23 @@ export function BoardCanvas({
           updateObject(id, { x: newX, y: newY });
         }
       }
+      // Push undo entry: restore all objects to their pre-drag positions
+      // posSnapshot holds center coords; convert to top-left for updateObject
+      const frozenObjects = objects;
+      pushUndo({
+        description: 'Move objects',
+        undo: () => {
+          posSnapshot.forEach((startPos, sid) => {
+            const obj = frozenObjects[sid];
+            if (!obj) return;
+            updateObject(sid, {
+              x: startPos.x - obj.width / 2,
+              y: startPos.y - obj.height / 2,
+            });
+          });
+        },
+      });
+
       groupDragStartPositions.current = new Map();
       frameDragFrameIdRef.current = null;
       if (frameDragRAFRef.current != null) {
@@ -531,7 +565,7 @@ export function BoardCanvas({
       }
       setFrameDragPositions(null);
     },
-    [updateObject, objects, allObjects]
+    [updateObject, pushUndo, objects, allObjects]
   );
 
   const handleResizeStart = useCallback(
@@ -629,10 +663,31 @@ export function BoardCanvas({
 
   const handleResizeEnd = useCallback(
     (objId: string, corner: string, e: Konva.KonvaEventObject<DragEvent>) => {
+      // Capture before-state before clearing refs
+      const startSnap = resizeStart.current;
+      const childrenSnap = new Map(resizeFrameChildrenStart.current);
+
       handleResizeMove(objId, corner, e);
       resizeStart.current = null;
+
+      if (startSnap) {
+        pushUndo({
+          description: 'Resize',
+          undo: () => {
+            updateObject(startSnap.objId, {
+              x: startSnap.x,
+              y: startSnap.y,
+              width: startSnap.w,
+              height: startSnap.h,
+            });
+            childrenSnap.forEach((c, cid) =>
+              updateObject(cid, { x: c.x, y: c.y, width: c.width, height: c.height })
+            );
+          },
+        });
+      }
     },
-    [handleResizeMove]
+    [handleResizeMove, pushUndo, updateObject]
   );
 
   const handleMouseMove = useCallback(
@@ -677,6 +732,17 @@ export function BoardCanvas({
       const tr = transformerRef.current;
       if (!tr) return;
       const nodes = tr.nodes();
+
+      // Capture before-state for undo
+      const prevState = new Map<string, { x: number; y: number; rotation: number }>();
+      nodes.forEach((node) => {
+        const id = selectedIds.find((sid) => objectNodeRefs.current.get(sid) === node);
+        if (!id) return;
+        const obj = objects[id];
+        if (!obj) return;
+        prevState.set(id, { x: obj.x, y: obj.y, rotation: obj.rotation ?? 0 });
+      });
+
       nodes.forEach((node) => {
         const id = selectedIds.find((sid) => objectNodeRefs.current.get(sid) === node);
         if (!id) return;
@@ -690,9 +756,19 @@ export function BoardCanvas({
           rotation: node.rotation(),
         });
       });
+
+      pushUndo({
+        description: 'Rotate',
+        undo: () => {
+          prevState.forEach(({ x, y, rotation }, id) => {
+            updateObject(id, { x, y, rotation });
+          });
+        },
+      });
+
       setTransformVersion((v) => v + 1);
     },
-    [selectedIds, objects, updateObject]
+    [selectedIds, objects, updateObject, pushUndo]
   );
 
   const handleAnchorMouseDown = useCallback(
@@ -717,7 +793,7 @@ export function BoardCanvas({
         }
         connectionJustCompleted.current = true;
         drawingConnectionRef.current = null;
-        createConnection({
+        const newConn = {
           id: crypto.randomUUID(),
           fromId: dc.fromId,
           fromAnchor: dc.fromAnchor,
@@ -726,7 +802,9 @@ export function BoardCanvas({
           points: dc.waypoints.length > 0 ? dc.waypoints : [],
           createdBy: userId,
           createdAt: Date.now(),
-        });
+        };
+        createConnection(newConn);
+        pushUndo({ description: 'Create connection', undo: () => deleteConnection(newConn.id) });
         setDrawingConnection(null);
       } else {
         // Not drawing: this click starts a new connection from this anchor
@@ -736,7 +814,7 @@ export function BoardCanvas({
         setDrawingConnection(newDC);
       }
     },
-    [objects, userId, createConnection]
+    [objects, userId, createConnection, deleteConnection, pushUndo]
   );
 
   const handleStageMouseUpWithConnection = useCallback(
@@ -770,7 +848,7 @@ export function BoardCanvas({
                   const d = (pt.x - worldPos.x) ** 2 + (pt.y - worldPos.y) ** 2;
                   if (d < bestDist) { bestDist = d; bestAnchor = anchor; }
                 }
-                createConnection({
+                const droppedConn = {
                   id: crypto.randomUUID(),
                   fromId: dc.fromId,
                   fromAnchor: dc.fromAnchor,
@@ -779,7 +857,9 @@ export function BoardCanvas({
                   points: dc.waypoints.length > 0 ? dc.waypoints : [],
                   createdBy: userId,
                   createdAt: Date.now(),
-                });
+                };
+                createConnection(droppedConn);
+                pushUndo({ description: 'Create connection', undo: () => deleteConnection(droppedConn.id) });
                 setDrawingConnection(null);
                 connectionJustCompleted.current = true;
                 break;
@@ -816,7 +896,7 @@ export function BoardCanvas({
         setSelectionRect(null);
       }
     },
-    [handleStageMouseUp, selectionRect, allObjects, updateObject, userId, userName, setSelection, viewport.scale, createConnection]
+    [handleStageMouseUp, selectionRect, allObjects, updateObject, userId, userName, setSelection, viewport.scale, createConnection, deleteConnection, pushUndo]
   );
 
   // Connection selection handlers
@@ -869,16 +949,47 @@ export function BoardCanvas({
         return;
       }
 
+      // Ctrl+Z / Cmd+Z: undo last action
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
+        const active = document.activeElement?.tagName;
+        if (active === 'INPUT' || active === 'TEXTAREA') return;
+        e.preventDefault();
+        const entry = useBoardStore.getState().popUndo();
+        if (entry) void entry.undo();
+        return;
+      }
+
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const active = document.activeElement?.tagName;
         if (active === 'INPUT' || active === 'TEXTAREA') return;
 
-        // Delete selected connection
+        // Delete selected connection — capture for undo first
         if (selectedConnectionId) {
+          const conn = connections[selectedConnectionId];
           deleteConnection(selectedConnectionId);
           setSelectedConnectionId(null);
+          if (conn) {
+            pushUndo({ description: 'Delete connection', undo: () => createConnection(conn) });
+          }
           return;
         }
+
+        // Capture before-state for objects being deleted
+        const deletedObjects = selectedIds
+          .map((id) => objects[id])
+          .filter((o): o is NonNullable<typeof o> => o != null);
+        const deletedConns = Object.values(connections).filter(
+          (c) => selectedIds.includes(c.fromId) || selectedIds.includes(c.toId)
+        );
+        // Track frame→child assignments that will be unlinked
+        const frameUnlinks: Array<{ id: string; frameId: string }> = [];
+        selectedIds.forEach((id) => {
+          if (objects[id]?.type === 'frame') {
+            allObjects.forEach((o) => {
+              if (o.frameId === id) frameUnlinks.push({ id: o.id, frameId: id });
+            });
+          }
+        });
 
         selectedIds.forEach((id) => {
           const obj = objects[id];
@@ -891,6 +1002,17 @@ export function BoardCanvas({
           deleteObject(id);
         });
         setSelection([]);
+
+        if (deletedObjects.length > 0 || deletedConns.length > 0) {
+          pushUndo({
+            description: 'Delete objects',
+            undo: () => {
+              deletedObjects.forEach((obj) => createObject(obj));
+              deletedConns.forEach((conn) => createConnection(conn));
+              frameUnlinks.forEach(({ id, frameId }) => updateObject(id, { frameId }));
+            },
+          });
+        }
       }
 
       // Ctrl+C: copy selected objects (only objects we selected; store snapshot so clipboard isn't affected by others' edits)
@@ -937,12 +1059,14 @@ export function BoardCanvas({
           x: obj.x + 20,
           y: obj.y + 20,
         }));
+        const pastedIds = [...newIds];
+        pushUndo({ description: 'Paste objects', undo: () => pastedIds.forEach((pid) => deleteObject(pid)) });
         setSelection(newIds);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, deleteObject, deleteConnectionsForObject, setSelection, drawingConnection, selectedConnectionId, deleteConnection, objects, createObject, updateObject, userId, userName]);
+  }, [selectedIds, deleteObject, deleteConnectionsForObject, setSelection, drawingConnection, selectedConnectionId, deleteConnection, createConnection, objects, connections, allObjects, createObject, updateObject, userId, userName, pushUndo]);
 
   // Cancel drawing on right-click
   useEffect(() => {
@@ -986,6 +1110,7 @@ export function BoardCanvas({
                 createdBy: userId,
                 createdAt: Date.now(),
               });
+              useBoardStore.getState().pushUndo({ description: 'Paste image', undo: () => deleteObject(id) });
               setSelection([id]);
             };
             img.src = dataUrl;
@@ -997,7 +1122,7 @@ export function BoardCanvas({
     };
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [createObject, userId, viewport, width, height, setSelection]);
+  }, [createObject, deleteObject, userId, viewport, width, height, setSelection]);
 
   // ---------------------------------------------------------------------------
   // Stable handler refs — updated every render so the wrappers below never go stale,

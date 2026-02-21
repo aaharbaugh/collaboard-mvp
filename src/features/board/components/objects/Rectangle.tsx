@@ -1,6 +1,6 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS } from '../../../../lib/constants';
 
 interface RectangleProps {
   obj: BoardObject;
@@ -11,7 +11,7 @@ interface RectangleProps {
 }
 
 export function Rectangle({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: RectangleProps) {
-  const color = obj.color ?? '#d4e4bc';
+  const color = obj.color ?? DEFAULT_OBJECT_COLORS.rectangle;
   const remoteColor = remoteSelectedBy
     ? CURSOR_COLORS[remoteSelectedBy.length % CURSOR_COLORS.length]
     : undefined;

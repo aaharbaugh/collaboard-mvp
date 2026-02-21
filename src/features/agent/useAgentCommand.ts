@@ -15,6 +15,18 @@ export interface AgentStatus {
   tools?: string[];
 }
 
+export interface ChatEntry {
+  role: 'user' | 'agent';
+  text: string;
+  /** Clickable option buttons shown below this message. */
+  options?: string[];
+}
+
+export interface AgentUndoInfo {
+  createdObjectIds: string[];
+  createdConnectionIds: string[];
+}
+
 export function getStatusMessage(status: AgentStatus | null): string {
   if (!status) return 'Working...';
   if (status.phase === 'thinking') {
@@ -23,7 +35,7 @@ export function getStatusMessage(status: AgentStatus | null): string {
   }
   if (status.phase === 'calling_tools' && status.tools?.length) {
     const tools = status.tools;
-    if (tools.some((t) => t === 'createBatch' || t === 'createStickyNote' || t === 'createShape' || t === 'createFrame' || t === 'createText')) {
+    if (tools.some((t) => t === 'createBatch' || t === 'createStickyNote' || t === 'createShape' || t === 'createFrame' || t === 'createText' || t === 'createMany')) {
       return 'Creating objects...';
     }
     if (tools.some((t) => t === 'connectBatch' || t === 'connectInSequence' || t === 'createConnector' || t === 'createMultiPointConnector')) {
@@ -32,6 +44,7 @@ export function getStatusMessage(status: AgentStatus | null): string {
     if (tools.some((t) => t === 'addToFrame')) return 'Grouping into frames...';
     if (tools.some((t) => t === 'deleteObjects')) return 'Removing objects...';
     if (tools.some((t) => t === 'setLayer')) return 'Adjusting layers...';
+    if (tools.some((t) => t === 'moveBatch' || t === 'arrangeWithin')) return 'Arranging objects...';
   }
   return 'Working...';
 }
@@ -40,11 +53,18 @@ export function useAgentCommand(boardId: string) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
+  const [history, setHistory] = useState<ChatEntry[]>([]);
+  const [lastUndoInfo, setLastUndoInfo] = useState<AgentUndoInfo | null>(null);
+  const clearHistory = () => { setHistory([]); setError(null); setLastUndoInfo(null); };
 
   const runCommand = async (command: string, context?: AgentCommandContext): Promise<unknown> => {
     setLoading(true);
     setError(null);
     setAgentStatus(null);
+    setLastUndoInfo(null);
+
+    // Add user message to history immediately
+    setHistory(prev => [...prev, { role: 'user', text: command }]);
 
     // Start listening to live agent status from Firebase
     const statusRef = ref(database, `boards/${boardId}/agentStatus`);
@@ -75,6 +95,17 @@ export function useAgentCommand(boardId: string) {
         throw new Error(body.error ?? `Request failed (${res.status})`);
       }
       const data = await res.json();
+
+      // Add agent response to history (with optional clickable options)
+      if (data.message) {
+        setHistory(prev => [...prev, { role: 'agent', text: data.message, options: data.options }]);
+      }
+
+      // Store undo info if the command created any objects/connections
+      if (data.undoInfo) {
+        setLastUndoInfo(data.undoInfo as AgentUndoInfo);
+      }
+
       setLoading(false);
       return data;
     } catch (err: unknown) {
@@ -89,5 +120,5 @@ export function useAgentCommand(boardId: string) {
     }
   };
 
-  return { runCommand, loading, error, agentStatus };
+  return { runCommand, loading, error, agentStatus, history, clearHistory, lastUndoInfo };
 }

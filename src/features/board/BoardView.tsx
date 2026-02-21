@@ -41,6 +41,7 @@ export function BoardView() {
   const setViewport = useBoardStore((s) => s.setViewport);
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const setSelection = useBoardStore((s) => s.setSelection);
+  const pushUndo    = useBoardStore((s) => s.pushUndo);
 
   const selectedObject = selectedIds.length === 1 ? objects[selectedIds[0]] : null;
 
@@ -51,7 +52,7 @@ export function BoardView() {
     const persisted = getPersistedEditState(boardId);
     if (!persisted) return;
     const obj = objects[persisted.editingId];
-    if (obj && (obj.type === 'stickyNote' || obj.type === 'text')) {
+    if (obj && (obj.type === 'stickyNote' || obj.type === 'text' || obj.type === 'frame')) {
       hasRestoredRef.current = true;
       if (
         persisted.viewport &&
@@ -89,23 +90,35 @@ export function BoardView() {
 
   const handleStickyNoteDoubleClick = (id: string) => {
     const obj = objects[id];
-    if (obj?.type !== 'stickyNote' && obj?.type !== 'text') return;
+    if (obj?.type !== 'stickyNote' && obj?.type !== 'text' && obj?.type !== 'frame') return;
     if (boardId) clearPersistedEditState(boardId);
-    latestDraftRef.current = obj?.text ?? '';
+    latestDraftRef.current = obj?.type === 'frame' ? (obj?.text?.trim() ?? 'Frame') : (obj?.text ?? '');
     setEditingId(id);
     setRestoredDraft(null);
   };
 
   const handleTextSave = (id: string, text: string, headingLevel?: number) => {
+    const prev = objects[id];
+    const prevText = prev?.text;
+    const prevHeadingLevel = prev?.headingLevel;
     updateObject(id, headingLevel !== undefined ? { text, headingLevel } : { text });
+    pushUndo({
+      description: 'Edit text',
+      undo: () => updateObject(id, { text: prevText, headingLevel: prevHeadingLevel }),
+    });
     if (boardId) clearPersistedEditState(boardId);
     setEditingId(null);
     setRestoredDraft(null);
   };
 
   const handleColorChange = (color: string) => {
+    const prevColors = selectedIds.map((id) => ({ id, color: objects[id]?.color }));
     selectedIds.forEach((id) => {
       updateObject(id, { color });
+    });
+    pushUndo({
+      description: 'Change color',
+      undo: () => prevColors.forEach(({ id, color: prev }) => updateObject(id, { color: prev })),
     });
   };
 
@@ -121,12 +134,31 @@ export function BoardView() {
     setRestoredDraft(null);
   };
 
+  const handleSendToBack = () => {
+    const prev = selectedIds.map((id) => ({ id, sentToBack: objects[id]?.sentToBack }));
+    selectedIds.forEach((id) => updateObject(id, { sentToBack: true }));
+    pushUndo({
+      description: 'Send to back',
+      undo: () => prev.forEach(({ id, sentToBack }) => updateObject(id, { sentToBack: sentToBack ?? false })),
+    });
+  };
+
+  const handleBringToFront = () => {
+    const prev = selectedIds.map((id) => ({ id, sentToBack: objects[id]?.sentToBack }));
+    selectedIds.forEach((id) => updateObject(id, { sentToBack: false }));
+    pushUndo({
+      description: 'Bring to front',
+      undo: () => prev.forEach(({ id, sentToBack }) => updateObject(id, { sentToBack: sentToBack ?? false })),
+    });
+  };
+
   const handleBoardSwitch = (id: string) => {
     setSelection([]);
     setEditingId(null);
     setRestoredDraft(null);
     hasRestoredRef.current = false;
     if (boardId) clearPersistedEditState(boardId);
+    useBoardStore.getState().clearUndoStack();
     setBoardIdOverride(id);
   };
 
@@ -150,8 +182,18 @@ export function BoardView() {
       const target = (e.target as Node) ?? null;
       const container = editOverlayContainerRef.current;
       if (container && target && container.contains(target)) return;
-      const draft = latestDraftRef.current ?? objects[editingId]?.text ?? '';
-      updateObject(editingId, { text: draft });
+      const obj = objects[editingId];
+      const prevText = obj?.text;
+      const prevHeadingLevel = obj?.headingLevel;
+      const raw = latestDraftRef.current ?? obj?.text ?? '';
+      const text =
+        obj?.type === 'frame' ? (raw.trim() || 'Frame') : raw;
+      const savedId = editingId;
+      updateObject(editingId, { text });
+      pushUndo({
+        description: 'Edit text',
+        undo: () => updateObject(savedId, { text: prevText, headingLevel: prevHeadingLevel }),
+      });
       clearPersistedEditState(boardId ?? '');
       setEditingId(null);
       setRestoredDraft(null);
@@ -162,7 +204,7 @@ export function BoardView() {
       document.removeEventListener('mousedown', handlePointerDown as (e: MouseEvent) => void, true);
       document.removeEventListener('touchstart', handlePointerDown as (e: TouchEvent) => void, true);
     };
-  }, [editingId, boardId, objects, updateObject]);
+  }, [editingId, boardId, objects, updateObject, pushUndo]);
 
   if (!user) {
     return null;
@@ -212,7 +254,6 @@ export function BoardView() {
                 onBoardSwitch={handleBoardSwitch}
               />
             )}
-            <span className="user-name">{user.displayName ?? 'User'}</span>
             <button className="btn-sign-out" onClick={signOut}>
               Sign out
             </button>
@@ -255,7 +296,7 @@ export function BoardView() {
                     type="button"
                     className="toolbar-btn"
                     title="Send behind arrows"
-                    onClick={() => selectedIds.forEach((id) => updateObject(id, { sentToBack: true }))}
+                    onClick={handleSendToBack}
                   >
                     Send to back
                   </button>
@@ -263,26 +304,24 @@ export function BoardView() {
                     type="button"
                     className="toolbar-btn"
                     title="Bring in front of arrows"
-                    onClick={() => selectedIds.forEach((id) => updateObject(id, { sentToBack: false }))}
+                    onClick={handleBringToFront}
                   >
                     Bring to front
                   </button>
                 </div>
               </div>
             )}
-            {isAiOpen && (
-              <AgentPanel
-                boardId={boardId}
-                isOpen={isAiOpen}
-                onClose={() => setIsAiOpen(false)}
-                selectedIds={selectedIds}
-                viewport={{
-                  ...viewport,
-                  width: wrapperRef.current?.offsetWidth,
-                  height: wrapperRef.current?.offsetHeight,
-                }}
-              />
-            )}
+            <AgentPanel
+              boardId={boardId}
+              isOpen={isAiOpen}
+              onClose={() => setIsAiOpen(false)}
+              selectedIds={selectedIds}
+              viewport={{
+                ...viewport,
+                width: wrapperRef.current?.offsetWidth,
+                height: wrapperRef.current?.offsetHeight,
+              }}
+            />
             <Toolbar
               onHotkeyPress={clearSelectionOnHotkey}
               onAiToggle={() => setIsAiOpen((v) => !v)}

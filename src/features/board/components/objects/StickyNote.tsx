@@ -1,6 +1,6 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
 import { parseLines, computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
 
 interface StickyNoteProps {
@@ -12,7 +12,7 @@ interface StickyNoteProps {
 }
 
 export function StickyNote({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: StickyNoteProps) {
-  const color = obj.color ?? '#f5e6ab';
+  const color = obj.color ?? DEFAULT_OBJECT_COLORS.stickyNote;
   const remoteColor = remoteSelectedBy
     ? CURSOR_COLORS[remoteSelectedBy.length % CURSOR_COLORS.length]
     : undefined;

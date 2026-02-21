@@ -3,15 +3,16 @@ interface ColorPickerProps {
   onColorChange: (color: string) => void;
 }
 
+/** Palette tuned for contrast on light-tan board (--bg-board #eee9e2). */
 const PALETTE = [
-  '#f5e6ab', // warm yellow
-  '#d4e4bc', // sage green
-  '#c5d5e8', // soft blue
-  '#e8c5c5', // dusty rose
-  '#d4c5e8', // lavender
-  '#c5e8d4', // mint
-  '#e8d4c5', // peach
-  '#e0e0d0', // light grey
+  '#e6d070', // golden yellow (sticky default – distinct from tan)
+  '#a8c888', // sage green
+  '#98b8d8', // soft blue
+  '#d8a0a0', // dusty rose
+  '#b8a0d8', // lavender
+  '#90d8b0', // mint
+  '#d8b898', // peach
+  '#d0c4b0', // warm cream (distinct from board tan)
 ];
 
 export function ColorPicker({ currentColor, onColorChange }: ColorPickerProps) {

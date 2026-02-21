@@ -1,6 +1,6 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS } from '../../../../lib/constants';
+import { CURSOR_COLORS, FRAME_FILL, FRAME_STROKE, FRAME_TITLE_COLOR } from '../../../../lib/constants';
 
 interface FrameProps {
   obj: BoardObject;
@@ -28,22 +28,20 @@ export function Frame({ obj, isSelected, showSelectionBorder = true, remoteSelec
         width={obj.width}
         height={obj.height}
         cornerRadius={cornerRadius}
-        fill="rgba(45, 90, 58, 0.07)"
-        stroke={showSelectionBorder && isSelected ? '#2d5a3a' : remoteColor ?? '#5a6c7d'}
+        fill={FRAME_FILL}
+        stroke={showSelectionBorder && isSelected ? '#2d5a3a' : remoteColor ?? FRAME_STROKE}
         strokeWidth={hasStroke ? sw : 1.5 / zoomScale}
         dash={[8 / zoomScale, 4 / zoomScale]}
         listening={true}
       />
-      {obj.text && (
-        <Text
-          x={obj.x + 4}
-          y={obj.y - 20 / zoomScale}
-          text={obj.text}
-          fontSize={13 / zoomScale}
-          fill="#00d4ff"
-          fontFamily="system-ui, sans-serif"
-        />
-      )}
+      <Text
+        x={obj.x + 4}
+        y={obj.y - 20 / zoomScale}
+        text={obj.text?.trim() || 'Frame'}
+        fontSize={13 / zoomScale}
+        fill={FRAME_TITLE_COLOR}
+        fontFamily="system-ui, sans-serif"
+      />
       {remoteSelectedBy && (
         <Text
           x={obj.x}

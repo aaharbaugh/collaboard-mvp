@@ -63,6 +63,11 @@ export interface AgentCommandRequest {
   viewport?: { x: number; y: number; scale: number; width?: number; height?: number };
 }
 
+interface CommandTracker {
+  createdObjectIds: string[];
+  createdConnectionIds: string[];
+}
+
 // ---------------------------------------------------------------------------
 // Retry helper (retry once on any error)
 // ---------------------------------------------------------------------------
@@ -80,18 +85,42 @@ async function callWithRetry<T>(fn: () => Promise<T>): Promise<T> {
 // ---------------------------------------------------------------------------
 
 function estimateRequiredIterations(command: string): number {
-  // executePlan handles creation+connections in 1 call; allow 1 extra for post-processing
+  // executePlan handles creation+connections in 1 call; allow extra rounds for post-processing
+  if (/within|inside|arrange.*in/i.test(command)) return 3; // may need resize + moveBatch + addToFrame
   const needsPostProcessing = /frame|group|layer|background|kanban|swot/i.test(command);
   return needsPostProcessing ? 3 : 2;
 }
 
-function detectPattern(command: string): string {
+// "create 50 stars", "make twenty blue circles", "add five sticky notes"
+const BULK_CREATE_RE =
+  /\b(\d+|two|three|four|five|six|seven|eight|nine|ten|fifteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred)\s+(?:(?:yellow|green|blue|rose|red|lavender|mint|peach|grey|gray|purple|orange|pink|white)\s+)?(?:star|circle|rectangle|square|sticky.?note|note|card)s?\b/i;
+
+// "stars in X pattern", "circles in a diamond" — shape + named layout, no count/verb required
+const SHAPE_LAYOUT_RE =
+  /\b(?:star|circle|rectangle|square|sticky.?note|note|card)s?\b.{0,80}\b(x[ -]?pattern|x[ -]?shape|cross|plus|diamond|rhombus|triangle|pyramid|circle|ring|radial)\b/i;
+
+// shape + UNKNOWN layout word → ask for clarification
+// Checked BEFORE BULK_CREATE_RE so "50 stars in heart pattern" triggers a question, not a grid
+const UNKNOWN_LAYOUT_RE =
+  /\b(?:star|circle|rectangle|square|sticky.?note|note|card)s?\b.{0,80}\b(?!(?:x[ -]?pattern|x[ -]?shape|cross|plus|diamond|rhombus|triangle|pyramid|circle|ring|radial|grid|row|column|horizontal|vertical)\b)\w{3,}\s+(?:pattern|layout|arrangement|formation)\b/i;
+
+// Matches: "arrange them within the blue rectangle", "put these inside the frame", etc.
+const ARRANGE_WITHIN_RE =
+  /\b(arrange|put|place|pack|organize|fit|group|distribute|move)\b.{0,60}\b(within|inside|over|on|into|onto|in)\b/i;
+
+function detectPattern(command: string, selectedIds?: string[]): string {
   if (/swot/i.test(command)) return 'swot';
   if (/kanban/i.test(command)) return 'kanban';
   if (/flowchart|flow chart/i.test(command)) return 'flowchart';
   if (/mind.?map/i.test(command)) return 'mindmap';
   if (/org.?chart|organization chart/i.test(command)) return 'orgchart';
   if (/comparison|compare|pros?.and.?cons?|pro.?con/i.test(command)) return 'comparison';
+  // arrange_within only makes sense when objects are selected
+  if (selectedIds && selectedIds.length >= 2 && ARRANGE_WITHIN_RE.test(command)) return 'arrange_within';
+  // Check UNKNOWN_LAYOUT_RE before BULK_CREATE_RE so "50 stars in heart pattern" → ask, not grid
+  if (UNKNOWN_LAYOUT_RE.test(command)) return 'unknown_layout';
+  if (SHAPE_LAYOUT_RE.test(command)) return 'bulk_create'; // shape + named known layout
+  if (BULK_CREATE_RE.test(command)) return 'bulk_create';  // explicit count
   return 'freeform';
 }
 
@@ -112,12 +141,63 @@ function checkOverlaps(cache: agentTools.ObjectCache): number {
 }
 
 // ---------------------------------------------------------------------------
+// Undo tracking helpers
+// ---------------------------------------------------------------------------
+
+const OBJECT_CREATE_TOOLS = new Set([
+  'createStickyNote', 'createShape', 'createFrame', 'createText',
+]);
+const CONN_CREATE_TOOLS = new Set(['createConnector']);
+
+function collectCreatedIds(toolName: string, result: unknown, tracker: CommandTracker): void {
+  if (result == null) return;
+  if (typeof result === 'string') {
+    if (OBJECT_CREATE_TOOLS.has(toolName)) tracker.createdObjectIds.push(result);
+    if (CONN_CREATE_TOOLS.has(toolName))   tracker.createdConnectionIds.push(result);
+    return;
+  }
+  if (Array.isArray(result)) {
+    if (['connectBatch', 'connectInSequence', 'createMultiPointConnector'].includes(toolName)) {
+      tracker.createdConnectionIds.push(...(result as string[]));
+    }
+    if (toolName === 'createBatch') {
+      (result as Array<{ id: string }>).forEach((item) => {
+        if (item?.id) tracker.createdObjectIds.push(item.id);
+      });
+    }
+    return;
+  }
+  if (typeof result === 'object') {
+    const r = result as Record<string, unknown>;
+    if (toolName === 'executePlan') {
+      if (r['idMap'] && typeof r['idMap'] === 'object') {
+        tracker.createdObjectIds.push(...Object.values(r['idMap'] as Record<string, string>));
+      }
+      if (Array.isArray(r['connectionIds'])) {
+        tracker.createdConnectionIds.push(...(r['connectionIds'] as string[]));
+      }
+    }
+    if (['createQuadrant', 'createColumnLayout'].includes(toolName)) {
+      if (typeof r['frameId'] === 'string') tracker.createdObjectIds.push(r['frameId']);
+      if (Array.isArray(r['objectIds']))     tracker.createdObjectIds.push(...(r['objectIds'] as string[]));
+    }
+    if (toolName === 'createDiagram') {
+      if (Array.isArray(r['nodeIds']))        tracker.createdObjectIds.push(...(r['nodeIds'] as string[]));
+      if (Array.isArray(r['connectionIds']))  tracker.createdConnectionIds.push(...(r['connectionIds'] as string[]));
+    }
+    if (toolName === 'createMany' && Array.isArray(r['objectIds'])) {
+      tracker.createdObjectIds.push(...(r['objectIds'] as string[]));
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Exported business logic (also testable without the callable wrapper)
 // ---------------------------------------------------------------------------
 
 export async function runAgentCommand(
   params: AgentCommandRequest
-): Promise<{ success: boolean; message: string }> {
+): Promise<{ success: boolean; message: string; options?: string[]; undoInfo?: CommandTracker }> {
   const { boardId, command, userId, userName, selectedIds, viewport } = params;
 
   // Validate board exists
@@ -147,7 +227,7 @@ export async function runAgentCommand(
   }
 
   const maxIterations = estimateRequiredIterations(command);
-  const estimatedPattern = detectPattern(command);
+  const estimatedPattern = detectPattern(command, selectedIds?.length ? selectedIds : undefined);
 
   // LangSmith observability — optional (no-op if LANGSMITH_API_KEY is not set)
   const langsmith = getLangsmith();
@@ -181,6 +261,7 @@ export async function runAgentCommand(
 
   let totalToolCalls = 0;
   let iterationsUsed = 0;
+  const tracker: CommandTracker = { createdObjectIds: [], createdConnectionIds: [] };
 
   try {
     // -----------------------------------------------------------------------
@@ -191,7 +272,7 @@ export async function runAgentCommand(
       const templateResult = await executeTemplate(
         estimatedPattern,
         command,
-        { boardId, userId, viewport: viewport ?? undefined, cache: objectCache },
+        { boardId, userId, viewport: viewport ?? undefined, cache: objectCache, selectedIds: selectedIds?.length ? selectedIds : undefined },
         tmplClient,
         tmplModel,
       );
@@ -203,7 +284,12 @@ export async function runAgentCommand(
             await rootRun!.patchRun();
           });
         }
-        return { success: true, message: templateResult.message };
+        return {
+          success: templateResult.success,
+          message: templateResult.message,
+          options: templateResult.options,
+          undoInfo: templateResult.undoInfo,
+        };
       }
       // Template returned null (unsupported pattern or error) → fall through to agentic loop
     }
@@ -287,6 +373,7 @@ export async function runAgentCommand(
           if (!result) {
             try {
               result = await dispatchTool(tc.function.name, args, boardId, userId, objectCache);
+              collectCreatedIds(tc.function.name, result, tracker);
             } catch (err: unknown) {
               result = { error: String(err) };
             }
@@ -318,7 +405,11 @@ export async function runAgentCommand(
       ]));
     }
 
-    const result = { success: true, message: `Executed ${totalToolCalls} operations` };
+    const undoInfo =
+      tracker.createdObjectIds.length > 0 || tracker.createdConnectionIds.length > 0
+        ? tracker
+        : undefined;
+    const result = { success: true, message: `Executed ${totalToolCalls} operations`, undoInfo };
     if (rootRun) {
       await withTrace(async () => {
         await rootRun!.end({ success: true, message: result.message, totalToolCalls });
@@ -490,6 +581,18 @@ async function dispatchTool(
         args as unknown as agentTools.CreateDiagramArgs,
         userId
       );
+    case 'createMany':
+      return agentTools.createMany(
+        boardId,
+        args as unknown as agentTools.CreateManyArgs,
+        userId,
+        cache
+      );
+    case 'arrangeWithin':
+      return agentTools.arrangeWithin(
+        boardId,
+        args as unknown as agentTools.ArrangeWithinArgs,
+      );
     case 'moveObject':
       return agentTools.moveObject(
         boardId,
@@ -546,20 +649,61 @@ function buildSpatialBoardStateText(
   const objValues = Object.values(boardState.objects) as Array<Record<string, unknown>>;
   const connValues = Object.values(boardState.connections) as Array<Record<string, unknown>>;
 
-  const objectLines = objValues.map((o) => {
-    const text = o['text'] ? `"${String(o['text']).slice(0, 40)}" ` : '';
-    const id = String(o['id'] ?? '');
-    const rawX = Number(o['x'] ?? 0);
-    const rawY = Number(o['y'] ?? 0);
-    const w = snap5(Number(o['width'] ?? 160));
-    const h = snap5(Number(o['height'] ?? 120));
-    const color = o['color'] ? ` ${String(o['color'])}` : '';
-    const type = String(o['type'] ?? 'unknown');
-    const posStr = origin
-      ? `(${relStr(rawX, origin.x)},${relStr(rawY, origin.y)})`
-      : `(${snap10(rawX)},${snap10(rawY)})`;
-    return `  [${type} ${text}id=${id} @ ${posStr} ${w}x${h}${color}]`;
-  });
+  // Group objects that share the same type+color+dimensions — keeps context small for bulk selections
+  type ObjGroup = {
+    type: string; color: string; w: number; h: number;
+    members: Array<{ id: string; x: number; y: number; text?: string }>;
+  };
+  const groupKey = (o: Record<string, unknown>) =>
+    `${String(o['type']??'')}|${String(o['color']??'')}|${snap5(Number(o['width']??160))}|${snap5(Number(o['height']??120))}`;
+
+  const groups = new Map<string, ObjGroup>();
+  for (const o of objValues) {
+    const key = groupKey(o);
+    if (!groups.has(key)) {
+      groups.set(key, {
+        type: String(o['type'] ?? 'unknown'),
+        color: o['color'] ? String(o['color']) : '',
+        w: snap5(Number(o['width'] ?? 160)),
+        h: snap5(Number(o['height'] ?? 120)),
+        members: [],
+      });
+    }
+    groups.get(key)!.members.push({
+      id: String(o['id'] ?? ''),
+      x: Number(o['x'] ?? 0),
+      y: Number(o['y'] ?? 0),
+      text: o['text'] ? String(o['text']).slice(0, 40) : undefined,
+    });
+  }
+
+  const objectLines: string[] = [];
+  for (const g of groups.values()) {
+    if (g.members.length >= 4 && !g.members[0].text) {
+      // Summarise the group: bounding box + id list
+      let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity;
+      for (const m of g.members) {
+        gMinX = Math.min(gMinX, m.x); gMinY = Math.min(gMinY, m.y);
+        gMaxX = Math.max(gMaxX, m.x + g.w); gMaxY = Math.max(gMaxY, m.y + g.h);
+      }
+      const boxStr = origin
+        ? `bbox(${relStr(gMinX,origin.x)},${relStr(gMinY,origin.y)})→(${relStr(gMaxX,origin.x)},${relStr(gMaxY,origin.y)})`
+        : `bbox(${snap10(gMinX)},${snap10(gMinY)})→(${snap10(gMaxX)},${snap10(gMaxY)})`;
+      const colorStr = g.color ? ` ${g.color}` : '';
+      const ids = g.members.map(m => m.id).join(',');
+      objectLines.push(`  [${g.members.length}x ${g.type} ${g.w}x${g.h}${colorStr} ${boxStr} ids=${ids}]`);
+    } else {
+      // Show each member individually
+      for (const m of g.members) {
+        const text = m.text ? `"${m.text}" ` : '';
+        const colorStr = g.color ? ` ${g.color}` : '';
+        const posStr = origin
+          ? `(${relStr(m.x, origin.x)},${relStr(m.y, origin.y)})`
+          : `(${snap10(m.x)},${snap10(m.y)})`;
+        objectLines.push(`  [${g.type} ${text}id=${m.id} @ ${posStr} ${g.w}x${g.h}${colorStr}]`);
+      }
+    }
+  }
 
   const connLines = connValues.map((c) => {
     const from = String(c['fromId'] ?? '');
@@ -650,6 +794,18 @@ Operations like "delete", "move", "change color" apply to these IDs unless told 
 
   return `You are the AI agent for CollabBoard. Respond ONLY with tool calls (one short confirmation when done).
 
+=== BEHAVIOR ===
+NEVER ask clarifying questions. ALWAYS act immediately using sensible defaults:
+• NEVER refuse. Flags, logos, maps, symbols — build everything from rectangles, circles, and stars.
+  Flag = stripes (rectangles) + canton (rectangle) + stars (createMany). Build it, don't describe it.
+• Keep final confirmation to ONE short sentence (e.g. "Done — created US flag with 13 stripes and 50 stars.").
+• Color not specified → yellow for sticky notes, blue for shapes
+• Layout not specified → grid
+• Size not specified → use type defaults (stickyNote 160×120, star/circle 100×100, rectangle 200×120)
+• Count not specified → 1 (unless context implies more)
+• Position not specified → viewport center
+If user says "create 50 stars" with no other details, call createMany immediately with grid layout and default color.
+
 === BOARD STATE ===
 ${stateBlock}
 (${objCount} objects, ${connCount} connections)
@@ -670,6 +826,10 @@ Frame bounds: x=min(child_x)-40, y=min(child_y)-50, w/h=span+80
 • SWOT / 2×2 matrix → createQuadrant({ title, quadrantLabels: { topLeft, topRight, bottomLeft, bottomRight }, items: { topLeft: [...], ... }, anchorX: cx, anchorY: cy })
 • Kanban / retro / journey map → createColumnLayout({ title, columns: [{ title, items: [...] }, ...], anchorX: cx, anchorY: cy })
 • Flowchart / sequence diagram → createDiagram({ nodes: [{ label }, ...], edges: [{ from: 0, to: 1 }, ...], layout: "horizontal"|"vertical", anchorX: cx, anchorY: cy })
+• 5+ identical objects → createMany({ objectType, count, layout:"grid"|"row"|"column"|"circle", anchorX, anchorY, color, gap })
+  Server computes ALL coordinates — do NOT pass x/y per item. Add containerId to pack inside an existing object.
+• Arrange existing objects INTO a container → arrangeWithin({ objectIds:[...], containerId, layout:"grid", resizeToFit:true })
+  Server reads real dimensions, packs tightly, resizes container. One call replaces moveBatch+resizeObject.
 All create frame + content + frameId + fit in one atomic write. Use viewport center for anchorX/anchorY when given.
 
 === LAYOUTS (when NOT using compound tools; cx,cy = viewport center) ===
@@ -702,6 +862,8 @@ Round 3: one short text confirmation, no tool calls.
 
 === RULES ===
 • PREFER compound tools for templates: createQuadrant (SWOT/matrix), createColumnLayout (kanban/retro), createDiagram (flowchart). One call = one round-trip.
+• BULK CREATION: When creating 5+ copies of the same object type, ALWAYS use createMany — never list 50 objects in executePlan. The LLM must NOT compute coordinates for bulk objects; the server does it.
+• ARRANGE INTO CONTAINER: When user says "arrange [selection] within/inside [X]", use arrangeWithin({objectIds:[...non-container IDs...], containerId:"...", layout:"grid", resizeToFit:true}). Do NOT use moveBatch with manual coordinates for this case.
 • For freeform creation use executePlan (objects + connections in one call).
 • FRAMES: when using executePlan, every frame MUST have addToFrame called in Round 2 with its child object IDs. Compound tools set frameId automatically.
   Failure to call addToFrame = children will not move with the frame.
@@ -717,6 +879,22 @@ Round 3: one short text confirmation, no tool calls.
   Call moveBatch with all computed positions in one call.
 • SPACE EVENLY: Sort by axis (horizontal → by x, vertical → by y). Distribute positions
   between first and last object position. Call moveBatch with all positions.
+• ARRANGE WITHIN CONTAINER: When user says "arrange [items] within/inside [X]":
+  1. IDENTIFY CONTAINER: the object the user named/described (e.g. "the blue sticky note",
+     "the frame"). Read its id, x_c, y_c, w_c, h_c from board state.
+  2. ITEMS = all other selected objects (NOT the container itself).
+  3. Use gap=8px. avg_item_w and avg_item_h from item dimensions (or type defaults).
+     cols = max(1, floor((w_c - 40) / (avg_item_w + gap)))
+     rows = ceil(N / cols)
+     needed_h = rows * (avg_item_h + gap) + 40
+  4. If needed_h > h_c OR cols * (avg_item_w + gap) + 40 > w_c:
+     → Call resizeObject(containerId, max(w_c, cols*(avg_item_w+gap)+40), needed_h) FIRST
+       to make the container large enough to hold all items.
+  5. Place items row-by-row starting from top-left interior (x_c+20, y_c+20):
+     item_x = x_c + 20 + col_i * (avg_item_w + gap)
+     item_y = y_c + 20 + row_i * (avg_item_h + gap)
+  6. Call moveBatch with ALL computed positions in one call.
+  7. If container is a frame, also call addToFrame(itemIds, containerId).
 • FIT FRAME: Use fitFrameToContents(frameId) when user asks to "resize frame to fit contents".
 • DELETE: deleteObjects(objectIds). "Delete selection" = use Selected Object IDs above.
 • Do NOT call getBoardState unless critical data is missing from the board state above.
@@ -880,6 +1058,49 @@ function getToolDefinitions(): OpenAI.Chat.ChatCompletionTool[] {
             anchorY: { type: 'number' },
           },
           required: ['nodes', 'edges'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'createMany',
+        description: 'Create N identical objects in ONE server-side call. The server computes ALL positions — you only specify count, layout type, and anchor. Use this instead of executePlan whenever creating 5+ copies of the same shape. Also accepts containerId to pack items inside an existing object (resizes container if needed).',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectType:  { type: 'string', enum: ['stickyNote', 'rectangle', 'circle', 'star'], description: 'Type of object to create' },
+            count:       { type: 'number', description: 'Number of objects (1–200)' },
+            layout:      { type: 'string', enum: ['grid', 'row', 'column', 'circle'], description: 'How to arrange the objects' },
+            anchorX:     { type: 'number', description: 'Top-left x of layout (absolute). Ignored when containerId is set.' },
+            anchorY:     { type: 'number', description: 'Top-left y of layout (absolute). Ignored when containerId is set.' },
+            itemWidth:   { type: 'number', description: 'Width of each item (px). Defaults: stickyNote=160, shapes=100.' },
+            itemHeight:  { type: 'number', description: 'Height of each item (px). Defaults: stickyNote=120, circle=100, other=80.' },
+            gap:         { type: 'number', description: 'Gap between items in px (default 10).' },
+            color:       { type: 'string', description: 'Color name or hex for all items.' },
+            text:        { type: 'string', description: 'Text label for stickyNote objects (same on all copies).' },
+            containerId: { type: 'string', description: 'If set, pack all items inside this container; server resizes container if needed.' },
+          },
+          required: ['objectType', 'count', 'layout'],
+        },
+      },
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'arrangeWithin',
+        description: 'Move EXISTING selected objects into a tight grid inside a container. Server reads actual dimensions, computes all positions, and resizes the container if needed. Use instead of moveBatch + resizeObject when packing objects into a container.',
+        parameters: {
+          type: 'object',
+          properties: {
+            objectIds:    { type: 'array', items: { type: 'string' }, description: 'Firebase IDs of objects to arrange (do NOT include containerId).' },
+            containerId:  { type: 'string', description: 'Firebase ID of the container (frame, sticky note, or shape).' },
+            layout:       { type: 'string', enum: ['grid', 'row', 'column'], description: 'Layout within container (default grid).' },
+            gap:          { type: 'number', description: 'Gap between items in px (default 8).' },
+            resizeToFit:  { type: 'boolean', description: 'Resize container if items don\'t fit (default true).' },
+            addToFrame:   { type: 'boolean', description: 'Set frameId on items so they belong to the frame (default false).' },
+          },
+          required: ['objectIds', 'containerId'],
         },
       },
     },

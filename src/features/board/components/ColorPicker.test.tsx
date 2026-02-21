@@ -21,7 +21,7 @@ describe('ColorPicker', () => {
   });
 
   it('marks current color as active', () => {
-    const currentColor = '#d4e4bc';
+    const currentColor = '#a8c888';
     render(<ColorPicker currentColor={currentColor} onColorChange={() => {}} />);
     const activeSwatch = screen.getByLabelText(`Set color to ${currentColor}`);
     expect(activeSwatch).toHaveClass('active');

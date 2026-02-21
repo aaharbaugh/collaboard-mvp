@@ -24,10 +24,16 @@ export function TextEditingOverlay({
   onDraftChange,
   latestDraftRef,
 }: TextEditingOverlayProps) {
+  const isFrame = obj?.type === 'frame';
   const [text, setText] = useState(
-    () => (initialDraft !== undefined ? initialDraft : obj?.text ?? '')
+    () =>
+      initialDraft !== undefined
+        ? initialDraft
+        : isFrame
+          ? (obj?.text?.trim() ?? 'Frame')
+          : (obj?.text ?? '')
   );
-  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const openedIdRef = useRef<string | null>(null);
   const draftDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -39,7 +45,12 @@ export function TextEditingOverlay({
     }
     if (openedIdRef.current !== obj.id) {
       openedIdRef.current = obj.id;
-      const next = initialDraft !== undefined ? initialDraft : obj.text ?? '';
+      const next =
+        initialDraft !== undefined
+          ? initialDraft
+          : obj.type === 'frame'
+            ? (obj.text?.trim() ?? 'Frame')
+            : (obj.text ?? '');
       setText(next);
       if (latestDraftRef) latestDraftRef.current = next;
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -69,13 +80,93 @@ export function TextEditingOverlay({
     if (!Number.isFinite(sw) || !Number.isFinite(sh) || sw < 1 || sh < 1) onCancel();
   }, [obj, viewport.scale, viewport.x, viewport.y, onCancel]);
 
-  if (!obj || (obj.type !== 'stickyNote' && obj.type !== 'text')) return null;
+  if (!obj || (obj.type !== 'stickyNote' && obj.type !== 'text' && obj.type !== 'frame')) return null;
 
   const scale = Number.isFinite(viewport.scale) && viewport.scale > 0 ? viewport.scale : 1;
   const screenX = obj.x * scale + viewport.x;
   const screenY = obj.y * scale + viewport.y;
   const screenW = obj.width * scale;
   const screenH = obj.height * scale;
+
+  // Frame title: single-line edit above the frame, Done on the right
+  if (obj.type === 'frame') {
+    const frameTitleHeight = 28;
+    const frameTitleY = screenY - frameTitleHeight - 4;
+    const frameInputWidth = Math.max(120, Math.min(280, screenW - 8));
+    const handleFrameKeyDown = (e: React.KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setText(obj.text?.trim() ?? 'Frame');
+        onCancel();
+      }
+      if (e.key === 'Enter') {
+        onSave(obj.id, text.trim() || 'Frame');
+        onCancel();
+      }
+    };
+    return (
+      <div
+        className="text-editing-overlay"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      >
+        <div
+          ref={toolbarRef}
+          style={{
+            position: 'absolute',
+            left: screenX + 4,
+            top: frameTitleY,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            pointerEvents: 'auto',
+          }}
+          onMouseDown={(e) => e.preventDefault()}
+        >
+          <input
+            ref={inputRef as React.RefObject<HTMLInputElement>}
+            type="text"
+            className="text-editing-input frame-name-input"
+            value={text}
+            onChange={(e) => {
+              const next = e.target.value;
+              setText(next);
+              if (latestDraftRef) latestDraftRef.current = next;
+            }}
+            onKeyDown={handleFrameKeyDown}
+            style={{
+              width: frameInputWidth,
+              height: frameTitleHeight,
+              boxSizing: 'border-box',
+              padding: '0 8px',
+              margin: 0,
+              border: '1px solid rgba(74,124,89,0.5)',
+              borderRadius: 4,
+              fontFamily: '"Courier New", Courier, monospace',
+              fontSize: 13,
+              color: 'var(--text-primary, #2c2416)',
+            }}
+          />
+          <button
+            className="text-edit-btn text-edit-btn-done"
+            onClick={() => {
+              onSave(obj.id, text.trim() || 'Frame');
+              onCancel();
+            }}
+            title="Save and close"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const minScreenDim = Math.min(screenW, screenH);
   const { fontSize: rawFontSize, padding: rawPadding } = computeAutoFitFontSize(
@@ -121,8 +212,12 @@ export function TextEditingOverlay({
     onCancel();
   };
 
-  const toolbarHeight = 28;
-  const toolbarTop = Math.max(8, screenY - toolbarHeight - 4);
+  const textAreaW = Math.max(1, screenW - screenPadding * 2);
+  const textAreaH = Math.max(1, screenH - screenPadding * 2);
+  const inset = 8;
+  // Bottom-right corner inside the textarea (anchor at corner, then shift so button sits inside)
+  const doneAnchorX = screenX + screenPadding + textAreaW - inset;
+  const doneAnchorY = screenY + screenPadding + textAreaH - inset;
 
   return (
     <div
@@ -137,25 +232,6 @@ export function TextEditingOverlay({
         zIndex: 5,
       }}
     >
-      <div
-        ref={toolbarRef}
-        className="text-edit-toolbar"
-        style={{
-          position: 'absolute',
-          left: screenX,
-          top: toolbarTop,
-          pointerEvents: 'auto',
-        }}
-        onMouseDown={(e) => e.preventDefault()}
-      >
-        <button
-          className="text-edit-btn text-edit-btn-done"
-          onClick={handleDone}
-          title="Save and close"
-        >
-          Done
-        </button>
-      </div>
       <textarea
         ref={inputRef}
         className="text-editing-input"
@@ -171,8 +247,8 @@ export function TextEditingOverlay({
           position: 'absolute',
           left: screenX + screenPadding,
           top: screenY + screenPadding,
-          width: Math.max(1, screenW - screenPadding * 2),
-          height: Math.max(1, screenH - screenPadding * 2),
+          width: textAreaW,
+          height: textAreaH,
           boxSizing: 'border-box',
           padding: 0,
           margin: 0,
@@ -188,6 +264,26 @@ export function TextEditingOverlay({
           pointerEvents: 'auto',
         }}
       />
+      <div
+        ref={toolbarRef}
+        className="text-edit-toolbar"
+        style={{
+          position: 'absolute',
+          left: doneAnchorX,
+          top: doneAnchorY,
+          transform: 'translate(-100%, -100%)',
+          pointerEvents: 'auto',
+        }}
+        onMouseDown={(e) => e.preventDefault()}
+      >
+        <button
+          className="text-edit-btn text-edit-btn-done"
+          onClick={handleDone}
+          title="Save and close"
+        >
+          Done
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { Group, Star as KonvaStar, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS } from '../../../../lib/constants';
 
 interface StarProps {
   obj: BoardObject;
@@ -11,7 +11,7 @@ interface StarProps {
 }
 
 export function Star({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: StarProps) {
-  const color = obj.color ?? '#e8d4bc';
+  const color = obj.color ?? DEFAULT_OBJECT_COLORS.star;
   const size = Math.min(obj.width, obj.height) / 2;
   const cx = obj.x + obj.width / 2;
   const cy = obj.y + obj.height / 2;

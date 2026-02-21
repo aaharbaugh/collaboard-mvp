@@ -1,6 +1,6 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
 import { parseLines, computeAutoFitFontSize, getWrappedLines, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
 
 interface TextElementProps {
@@ -53,7 +53,7 @@ export function TextElement({
   const hasContent = displayText.length > 0;
   const showText = bigEnoughToRender && w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
 
-  const textColor = obj.color ?? '#1a1a1a';
+  const textColor = obj.color ?? DEFAULT_OBJECT_COLORS.text;
 
   return (
     <Group

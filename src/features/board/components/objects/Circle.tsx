@@ -1,6 +1,6 @@
 import { Group, Circle as KonvaCircle, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS } from '../../../../lib/constants';
 
 interface CircleProps {
   obj: BoardObject;
@@ -11,7 +11,7 @@ interface CircleProps {
 }
 
 export function Circle({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale = 1 }: CircleProps) {
-  const color = obj.color ?? '#c5d5e8';
+  const color = obj.color ?? DEFAULT_OBJECT_COLORS.circle;
   const radius = Math.min(obj.width, obj.height) / 2;
   const remoteColor = remoteSelectedBy
     ? CURSOR_COLORS[remoteSelectedBy.length % CURSOR_COLORS.length]

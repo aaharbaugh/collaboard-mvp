@@ -1,6 +1,11 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
 
+export interface UndoEntry {
+  description: string;
+  undo: () => void | Promise<void>;
+}
+
 export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'text' | 'frame';
 
 /** Order for the Shape [3] cycle: Circle -> Rectangle -> Star */
@@ -28,6 +33,11 @@ interface BoardStore {
   cycleShapeTool: () => void;
   /** Cycle between Select and Move. Used by hotkey 1. */
   cyclePointerTool: () => void;
+
+  undoStack: UndoEntry[];
+  pushUndo: (entry: UndoEntry) => void;
+  popUndo: () => UndoEntry | undefined;
+  clearUndoStack: () => void;
 }
 
 export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) => ({
@@ -54,4 +64,17 @@ export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) =>
       const next = idx >= 0 ? POINTER_CYCLE[(idx + 1) % POINTER_CYCLE.length] : POINTER_CYCLE[0];
       return { toolMode: next };
     }),
+
+  undoStack: [],
+  pushUndo: (entry) =>
+    set((state) => ({ undoStack: [entry, ...state.undoStack].slice(0, 10) })),
+  popUndo: () => {
+    let top: UndoEntry | undefined;
+    set((state) => {
+      top = state.undoStack[0];
+      return { undoStack: state.undoStack.slice(1) };
+    });
+    return top;
+  },
+  clearUndoStack: () => set({ undoStack: [] }),
 })));

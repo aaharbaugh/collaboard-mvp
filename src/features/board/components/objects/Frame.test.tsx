@@ -31,18 +31,14 @@ describe('Frame', () => {
     expect(screen.getByText('Sprint Planning')).toBeInTheDocument();
   });
 
-  it('does not render a title element when obj.text is undefined', () => {
+  it('renders default title "Frame" when obj.text is undefined', () => {
     render(<Frame obj={{ ...baseObj, text: undefined }} isSelected={false} />);
-    // The remoteSelectedBy Text is absent too, so no konva-text elements
-    expect(screen.queryByText('Sprint Planning')).not.toBeInTheDocument();
+    expect(screen.getByText('Frame')).toBeInTheDocument();
   });
 
-  it('does not render a title element when obj.text is empty string', () => {
+  it('renders default title "Frame" when obj.text is empty string', () => {
     render(<Frame obj={{ ...baseObj, text: '' }} isSelected={false} />);
-    const texts = screen.queryAllByTestId('konva-text');
-    // An empty string is falsy, so no Text element should be rendered for title
-    const withContent = texts.filter((el) => el.textContent !== '');
-    expect(withContent).toHaveLength(0);
+    expect(screen.getByText('Frame')).toBeInTheDocument();
   });
 
   it('renders the remote user label when remoteSelectedBy is provided', () => {

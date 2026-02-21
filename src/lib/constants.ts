@@ -7,11 +7,12 @@ export const CURSOR_COLORS = [
   '#6b6b3a', // olive
 ];
 
+/** Shape fill colors tuned for contrast on light-tan board (--bg-board #eee9e2). */
 export const DEFAULT_OBJECT_COLORS: Record<string, string> = {
-  stickyNote: '#f5e6ab',
-  rectangle: '#d4e4bc',
-  circle: '#c5d5e8',
-  star: '#e8d4bc',
+  stickyNote: '#e6d070',
+  rectangle: '#a8c888',
+  circle: '#98b8d8',
+  star: '#d8b898',
   text: '#1a1a1a',
 };
 
@@ -49,3 +50,9 @@ export const FRAME_DEFAULTS = {
   width: 320,
   height: 220,
 };
+
+/** Colors for frames and connections; tuned for contrast on light-tan board. */
+export const FRAME_STROKE = '#5a5048';
+export const FRAME_FILL = 'rgba(50, 85, 55, 0.09)';
+export const FRAME_TITLE_COLOR = '#4a4035';
+export const CONNECTION_DEFAULT_COLOR = '#5a5044';

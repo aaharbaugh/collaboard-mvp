@@ -8,7 +8,9 @@
   --text-muted: #6b5d4d;
   --border-color: #2c2416;
   --border-light: rgba(44, 36, 22, 0.25);
-  --grid-line: rgba(80, 70, 55, 0.12);
+  /* Graph-paper style: light tan with visible grid */
+  --bg-board: #eee9e2;
+  --grid-line: rgba(110, 95, 80, 0.26);
 }
 
 * {
@@ -605,15 +607,15 @@ body {
 .text-edit-toolbar {
   display: flex;
   gap: 2px;
-  background: var(--bg-card);
-  border: 2px solid var(--border-color);
+  background: transparent;
+  border: none;
   border-radius: 2px;
   padding: 2px;
 }
 
 .text-edit-btn {
   background: transparent;
-  border: 1px solid var(--border-light);
+  border: none;
   color: var(--text-primary);
   padding: 2px 8px;
   font-size: 0.75rem;
@@ -625,19 +627,18 @@ body {
 }
 
 .text-edit-btn:hover {
-  border-color: var(--accent-green);
   color: var(--accent-green);
 }
 
 .text-edit-btn-done {
   margin-left: 4px;
   background: var(--accent-green);
-  border-color: var(--accent-green);
-  color: var(--bg-primary);
+  border: none;
+  color: #fff;
 }
 .text-edit-btn-done:hover {
   filter: brightness(1.1);
-  color: var(--bg-primary);
+  color: #fff;
 }
 
 /* Board canvas */
@@ -651,6 +652,11 @@ body {
   width: 100%;
   height: 100%;
   overflow: hidden;
+  background-color: var(--bg-board);
+  background-image:
+    linear-gradient(to right, var(--grid-line) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-line) 1px, transparent 1px);
+  background-size: 24px 24px;
 }
 
 .board-container {
@@ -753,6 +759,37 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
+}
+
+.agent-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.agent-new-chat-btn {
+  background: transparent;
+  border: 1px solid var(--border-light);
+  color: var(--text-muted);
+  height: 20px;
+  padding: 0 0.45rem;
+  font-size: 0.65rem;
+  font-family: "Courier New", "Courier", monospace;
+  border-radius: 2px;
+  cursor: pointer;
+  line-height: 1;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.agent-new-chat-btn:hover:not(:disabled) {
+  border-color: var(--accent-amber);
+  color: var(--accent-amber);
+}
+
+.agent-new-chat-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .agent-close-btn {
@@ -876,6 +913,112 @@ body {
   color: var(--accent-amber);
   border-left: 2px solid var(--accent-amber);
   padding-left: 0.5rem;
+}
+
+.agent-message-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.agent-message-options {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding-left: 0.25rem;
+}
+
+.agent-option-btn {
+  text-align: left;
+  background: transparent;
+  border: 1px solid var(--accent-green);
+  border-radius: 2px;
+  color: var(--accent-green);
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.73rem;
+  padding: 0.28rem 0.5rem;
+  cursor: pointer;
+  transition: all 0.15s;
+  opacity: 0.85;
+}
+
+.agent-option-btn:hover:not(:disabled) {
+  background: var(--accent-green);
+  color: var(--bg-parchment);
+  opacity: 1;
+}
+
+.agent-option-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.agent-undo-btn {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 3px 10px;
+  font-size: 0.75rem;
+  font-family: inherit;
+  border: 1px solid #c8a96e;
+  background: #fdf6e8;
+  color: #7a5520;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.agent-undo-btn:hover:not(:disabled) {
+  background: #f5e8c8;
+}
+
+.agent-undo-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Chat history */
+.agent-history {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 0.4rem 0.1rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.agent-message {
+  font-family: "Courier New", "Courier", monospace;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  padding: 0.35rem 0.55rem;
+  border-radius: 2px;
+  max-width: 88%;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.agent-message--user {
+  align-self: flex-end;
+  background: var(--bg-parchment);
+  border: 1px solid var(--accent-amber);
+  color: var(--text-primary);
+}
+
+.agent-message--agent {
+  align-self: flex-start;
+  background: transparent;
+  border: 1px solid var(--accent-green);
+  color: var(--accent-green);
+}
+
+.agent-message--thinking {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  opacity: 0.8;
+  border-style: dashed;
 }
 
 .agent-examples-label {

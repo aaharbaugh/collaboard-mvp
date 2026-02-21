@@ -30,18 +30,32 @@ export function getWrappedLines(
     let lineLen = 0;
     for (const word of words) {
       const isSpace = /^\s+$/.test(word);
-      const wordLen = word.length;
-      if (lineLen + wordLen <= maxCharsPerLine || lineLen === 0) {
+      if (isSpace) {
         line += word;
-        lineLen += wordLen;
-      } else {
-        if (line.trim().length > 0) lines.push(line.trimEnd());
-        if (isSpace) {
+        lineLen += word.length;
+        continue;
+      }
+      // Break long words so they wrap; each chunk fits in maxCharsPerLine
+      let remaining = word;
+      while (remaining.length > 0) {
+        const spaceLeft = maxCharsPerLine - lineLen;
+        if (spaceLeft >= remaining.length) {
+          line += remaining;
+          lineLen += remaining.length;
+          remaining = '';
+        } else if (spaceLeft > 0) {
+          line += remaining.slice(0, spaceLeft);
+          lineLen += spaceLeft;
+          remaining = remaining.slice(spaceLeft);
+          if (line.trim().length > 0) lines.push(line.trimEnd());
           line = '';
           lineLen = 0;
         } else {
-          line = word;
-          lineLen = wordLen;
+          if (line.trim().length > 0) lines.push(line.trimEnd());
+          const take = Math.min(maxCharsPerLine, remaining.length);
+          line = remaining.slice(0, take);
+          lineLen = take;
+          remaining = remaining.slice(take);
         }
       }
     }
@@ -79,13 +93,14 @@ export function computeAutoFitFontSize(
     return { fontSize: minFont, padding };
   }
 
-  const maxLineLen = Math.max(1, ...lineTexts.map((s) => s.length));
-  const fontSizeByWidth = availW / (maxLineLen * CHAR_ASPECT);
   const minFont = minDim * 0.04;
-  let fontSize = Math.min(fontSizeByWidth, availH / LINE_HEIGHT_RATIO);
+  // Start from height: one line of text uses this font. Only shrink when wrapped lines exceed height.
+  const maxFontByHeight = availH / LINE_HEIGHT_RATIO;
+  const maxFontByWidth = availW / CHAR_ASPECT; // one character fits in width (long words wrap)
+  let fontSize = Math.min(maxFontByHeight, maxFontByWidth);
   fontSize = Math.max(minFont, fontSize);
 
-  // Iterate: at current fontSize, get actual wrapped line count; shrink font so those lines fit in height
+  // Iterate: at current fontSize, get actual wrapped line count; shrink font only so those lines fit in height
   const maxIterations = 15;
   for (let i = 0; i < maxIterations; i++) {
     const wrapped = getWrappedLines(paragraphText, availW, fontSize);
