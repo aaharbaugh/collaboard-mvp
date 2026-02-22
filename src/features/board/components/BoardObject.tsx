@@ -15,6 +15,7 @@ interface BoardObjectProps {
   showSelectionBorder?: boolean;
   remoteSelectedBy?: string;
   zoomScale?: number;
+  chainStatus?: 'queued' | 'running' | null;
 }
 
 function areEqual(prev: BoardObjectProps, next: BoardObjectProps): boolean {
@@ -23,13 +24,18 @@ function areEqual(prev: BoardObjectProps, next: BoardObjectProps): boolean {
     prev.isSelected !== next.isSelected ||
     prev.showSelectionBorder !== next.showSelectionBorder ||
     prev.remoteSelectedBy !== next.remoteSelectedBy ||
-    prev.zoomScale !== next.zoomScale
+    prev.zoomScale !== next.zoomScale ||
+    prev.chainStatus !== next.chainStatus
   )
     return false;
   const a = prev.obj;
   const b = next.obj;
   if (a.type !== b.type) return false;
   if (a.width !== b.width || a.height !== b.height || a.text !== b.text || a.color !== b.color) return false;
+  if (a.promptOutput !== b.promptOutput) return false;
+  if (a.promptTemplate !== b.promptTemplate) return false;
+  if ((a.pills?.length ?? 0) !== (b.pills?.length ?? 0)) return false;
+  if (a.lastRunStatus !== b.lastRunStatus) return false;
   if ((a.rotation ?? 0) !== (b.rotation ?? 0)) return false;
   if (a.sentToBack !== b.sentToBack) return false;
   if (a.selectedBy !== b.selectedBy || a.selectedByName !== b.selectedByName) return false;
@@ -38,9 +44,9 @@ function areEqual(prev: BoardObjectProps, next: BoardObjectProps): boolean {
   return true;
 }
 
-function BoardObjectInner({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale }: BoardObjectProps) {
+function BoardObjectInner({ obj, isSelected, showSelectionBorder = true, remoteSelectedBy, zoomScale, chainStatus }: BoardObjectProps) {
   if (obj.type === 'stickyNote') {
-    return <StickyNote obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;
+    return <StickyNote obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} chainStatus={chainStatus} />;
   }
   if (obj.type === 'text') {
     return <TextElement obj={obj} isSelected={isSelected} showSelectionBorder={showSelectionBorder} remoteSelectedBy={remoteSelectedBy} zoomScale={zoomScale} />;

@@ -10,6 +10,15 @@ function getUrlBoardId(): string | null {
   return params.get('board');
 }
 
+/** Update the URL ?board= param so refresh returns to the same board. */
+function syncBoardToUrl(boardId: string): void {
+  const url = new URL(window.location.href);
+  if (url.searchParams.get('board') !== boardId) {
+    url.searchParams.set('board', boardId);
+    window.history.replaceState({}, '', url.toString());
+  }
+}
+
 /** Best-effort: index the board under userBoards. Never throws. */
 async function tryIndexBoard(userId: string, boardId: string): Promise<void> {
   try {
@@ -55,22 +64,21 @@ export function useBoardId(userId: string | undefined) {
         // If a board ID is specified in the URL, try to join that board
         const urlBoardId = getUrlBoardId();
         if (urlBoardId) {
-          const urlBoardRef = ref(database, `boards/${urlBoardId}`);
-          const urlSnapshot = await get(urlBoardRef);
-          if (urlSnapshot.exists()) {
-            const collaborators = urlSnapshot.child('collaborators').val() || {};
-            if (!collaborators[userId]) {
-              await update(ref(database, `boards/${urlBoardId}`), {
-                [`collaborators/${userId}`]: true,
-              });
-            }
+          try {
+            // Add ourselves as collaborator first (child rule allows self-add)
+            await set(ref(database, `boards/${urlBoardId}/collaborators/${userId}`), true);
+            // Write succeeded → board exists and we're now a collaborator
             addBoardToCache(userId, urlBoardId);
             await tryIndexBoard(userId, urlBoardId);
             if (!cancelled) {
+              syncBoardToUrl(urlBoardId);
               setBoardId(urlBoardId);
               setLoading(false);
             }
             return;
+          } catch (joinErr) {
+            console.error('[useBoardId] Failed to join shared board:', urlBoardId, joinErr);
+            // Board doesn't exist or write failed — fall through to default
           }
         }
 
@@ -118,6 +126,7 @@ export function useBoardId(userId: string | undefined) {
         await tryIndexBoard(userId, SHARED_DEMO_BOARD_ID);
 
         if (!cancelled) {
+          syncBoardToUrl(SHARED_DEMO_BOARD_ID);
           setBoardId(SHARED_DEMO_BOARD_ID);
         }
       } catch (err) {
@@ -134,6 +143,7 @@ export function useBoardId(userId: string | undefined) {
           try {
             const personalId = await createPersonalBoard();
             if (!cancelled) {
+              syncBoardToUrl(personalId);
               setBoardId(personalId);
             }
           } catch (fallbackErr) {

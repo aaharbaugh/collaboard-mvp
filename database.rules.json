@@ -9,7 +9,12 @@
       },
       "$boardId": {
         ".read": "auth != null && (!data.exists() || data.child('metadata/owner').val() === auth.uid || data.child('collaborators').child(auth.uid).exists())",
-        ".write": "auth != null && ((!data.exists() && newData.child('metadata/owner').val() === auth.uid) || (data.exists() && (data.child('metadata/owner').val() === auth.uid || data.child('collaborators').child(auth.uid).exists())))"
+        ".write": "auth != null && ((!data.exists() && newData.child('metadata/owner').val() === auth.uid) || (data.exists() && (data.child('metadata/owner').val() === auth.uid || data.child('collaborators').child(auth.uid).exists())))",
+        "collaborators": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && newData.val() === true && root.child('boards').child($boardId).exists()"
+          }
+        }
       }
     },
     "userBoards": {

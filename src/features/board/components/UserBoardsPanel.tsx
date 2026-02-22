@@ -10,10 +10,10 @@ interface Props {
 
 export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props) {
   const [open, setOpen] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedBoardId, setCopiedBoardId] = useState<string | null>(null);
   const [newBoardStep, setNewBoardStep] = useState<'idle' | 'naming' | 'creating'>('idle');
   const [newBoardName, setNewBoardName] = useState('');
-  const [duplicating, setDuplicating] = useState(false);
+  const [duplicatingBoardId, setDuplicatingBoardId] = useState<string | null>(null);
   const [editingBoardId, setEditingBoardId] = useState<string | null>(null);
   const [editingBoardName, setEditingBoardName] = useState('');
   const panelRef = useRef<HTMLDivElement>(null);
@@ -103,26 +103,47 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
   };
 
   // ── Duplicate ──────────────────────────────────────────────────────────────
-  const handleDuplicate = async () => {
-    if (duplicating) return;
-    setDuplicating(true);
+  const handleDuplicate = async (boardId: string, boardName: string) => {
+    if (duplicatingBoardId) return;
+    setDuplicatingBoardId(boardId);
     try {
-      const id = await duplicateBoard(userId, currentBoardId, currentName);
+      const id = await duplicateBoard(userId, boardId, boardName);
       void refresh();
       onBoardSwitch(id);
       setOpen(false);
     } finally {
-      setDuplicating(false);
+      setDuplicatingBoardId(null);
     }
   };
 
   // ── Share ──────────────────────────────────────────────────────────────────
-  const handleShareBoard = () => {
-    const url = `${window.location.origin}${window.location.pathname}?board=${currentBoardId}`;
-    navigator.clipboard.writeText(url).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
+  const handleShareBoard = (boardId: string) => {
+    const url = `${window.location.origin}${window.location.pathname}?board=${boardId}`;
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(url).then(() => {
+          setCopiedBoardId(boardId);
+          setTimeout(() => setCopiedBoardId(null), 2000);
+        }).catch(() => fallbackCopy(url, boardId));
+      } else {
+        fallbackCopy(url, boardId);
+      }
+    } catch {
+      fallbackCopy(url, boardId);
+    }
+  };
+
+  const fallbackCopy = (text: string, boardId: string) => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    setCopiedBoardId(boardId);
+    setTimeout(() => setCopiedBoardId(null), 2000);
   };
 
   return (
@@ -171,6 +192,21 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
                         <span className="user-boards-item-name">{board.name}</span>
                       </button>
                       <div className="user-boards-item-actions">
+                        <button
+                          className="user-boards-icon-btn"
+                          title={copiedBoardId === board.id ? 'Copied!' : 'Share'}
+                          onClick={(e) => { e.stopPropagation(); handleShareBoard(board.id); }}
+                        >
+                          {copiedBoardId === board.id ? '✓' : '⎘'}
+                        </button>
+                        <button
+                          className="user-boards-icon-btn"
+                          title="Duplicate"
+                          disabled={duplicatingBoardId === board.id}
+                          onClick={(e) => { e.stopPropagation(); void handleDuplicate(board.id, board.name); }}
+                        >
+                          {duplicatingBoardId === board.id ? '…' : '⧉'}
+                        </button>
                         <button
                           className="user-boards-icon-btn"
                           title="Rename"
@@ -224,16 +260,6 @@ export function UserBoardsPanel({ userId, currentBoardId, onBoardSwitch }: Props
             {newBoardStep === 'creating' && (
               <button className="user-boards-action-btn" disabled>[ creating... ]</button>
             )}
-            <button
-              className="user-boards-action-btn"
-              onClick={() => void handleDuplicate()}
-              disabled={duplicating}
-            >
-              {duplicating ? '[ duplicating... ]' : '[⧉] Duplicate Board'}
-            </button>
-            <button className="user-boards-action-btn share" onClick={handleShareBoard}>
-              {copied ? '[ copied! ]' : '[⎘] Share Board'}
-            </button>
           </div>
         </div>
       )}

@@ -52,17 +52,17 @@ describe('Toolbar', () => {
     expect(stickyBtn).toHaveClass('active');
   });
 
-  it('shape button [3] cycles star -> circle -> rectangle', async () => {
+  it('shape button [3] cycles circle -> rectangle -> star', async () => {
     const user = userEvent.setup();
     render(<Toolbar />);
     const shapeBtn = screen.getByRole('button', { name: /\[3\]/ });
-    await user.click(shapeBtn);
-    expect(useBoardStore.getState().toolMode).toBe('star');
     await user.click(shapeBtn);
     expect(useBoardStore.getState().toolMode).toBe('circle');
     await user.click(shapeBtn);
     expect(useBoardStore.getState().toolMode).toBe('rectangle');
     await user.click(shapeBtn);
     expect(useBoardStore.getState().toolMode).toBe('star');
+    await user.click(shapeBtn);
+    expect(useBoardStore.getState().toolMode).toBe('circle');
   });
 });

@@ -1,4 +1,5 @@
-import type { BoardObject, AnchorPosition } from '../../../types/board';
+import type { BoardObject, AnchorPosition, PillRef } from '../../../types/board';
+import { getPillLocalXY, NODE_TO_ANCHOR } from '../../wiring/constants';
 
 /**
  * Single source of truth for connection anchor positions in world coordinates.
@@ -47,4 +48,32 @@ function rotatePoint(cx: number, cy: number, dx: number, dy: number, angleDeg: n
     x: cx + dx * c - dy * s,
     y: cy + dx * s + dy * c,
   };
+}
+
+/**
+ * World-coordinate position for a pill on an object.
+ * Input pills distribute along left edge, output pills along right edge.
+ * Falls back to the legacy NODE_TO_ANCHOR position if the node isn't found in pills.
+ */
+export function getPillWorldPoint(
+  obj: BoardObject,
+  pills: PillRef[],
+  nodeNumber: number,
+): { x: number; y: number } {
+  const { x, y, width: w, height: h } = obj;
+  const local = getPillLocalXY(w, h, pills, nodeNumber);
+
+  if (!local) {
+    // Fallback: use legacy anchor-based positioning
+    const anchor = NODE_TO_ANCHOR[nodeNumber] as AnchorPosition | undefined;
+    if (anchor) return getAnchorWorldPoint(obj, anchor);
+    return { x: x + w / 2, y };
+  }
+
+  // Convert from top-left-relative to center-relative for rotation
+  const cx = x + w / 2;
+  const cy = y + h / 2;
+  const dx = local.x - w / 2;
+  const dy = local.y - h / 2;
+  return rotatePoint(cx, cy, dx, dy, obj.rotation ?? 0);
 }

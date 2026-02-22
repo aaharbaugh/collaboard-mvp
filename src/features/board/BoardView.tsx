@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../auth/useAuth';
 import { useBoardId } from './hooks/useBoardId';
 import { BoardCanvas } from './BoardCanvas';
@@ -17,6 +17,10 @@ import {
   setPersistedEditState,
   clearPersistedEditState,
 } from '../../lib/editStatePersistence';
+import { usePromptRunner } from '../wiring/usePromptRunner';
+import { getExecutionChain } from '../wiring/wireGraph';
+import type { PillRef } from '../../types/board';
+import type { PromptDataSnapshot } from '../wiring/PillEditor';
 
 export function BoardView() {
   const { user, signOut } = useAuth();
@@ -30,8 +34,20 @@ export function BoardView() {
   const wrapperRef = useRef<HTMLDivElement>(null);
   const editOverlayContainerRef = useRef<HTMLDivElement>(null);
   const latestDraftRef = useRef<string>('');
+  const latestPromptDataRef = useRef<PromptDataSnapshot | null>(null);
 
-  const { objects, updateObject } = useBoardSync(boardId);
+  const {
+    objects,
+    wires,
+    updateObject,
+    createObject,
+    deleteObject,
+    createWire,
+    updateWire,
+    deleteWire,
+    deleteWiresForObject,
+  } = useBoardSync(boardId);
+  const { runPrompt } = usePromptRunner(boardId);
   const { cursors } = useCursorSync(
     boardId,
     user?.uid,
@@ -92,7 +108,14 @@ export function BoardView() {
     const obj = objects[id];
     if (obj?.type !== 'stickyNote' && obj?.type !== 'text' && obj?.type !== 'frame') return;
     if (boardId) clearPersistedEditState(boardId);
-    latestDraftRef.current = obj?.type === 'frame' ? (obj?.text?.trim() ?? 'Frame') : (obj?.text ?? '');
+    const isPromptNode = (obj.pills?.length ?? 0) > 0 || !!obj.promptTemplate;
+    const displayText = obj?.type === 'frame'
+      ? (obj?.text?.trim() ?? 'Frame')
+      : isPromptNode
+        ? (obj?.text ?? '')
+        : (obj?.promptOutput ?? obj?.text ?? '');
+    latestDraftRef.current = displayText;
+    latestPromptDataRef.current = null;
     setEditingId(id);
     setRestoredDraft(null);
   };
@@ -100,12 +123,24 @@ export function BoardView() {
   const handleTextSave = (id: string, text: string, headingLevel?: number) => {
     const prev = objects[id];
     const prevText = prev?.text;
+    const prevPromptOutput = prev?.promptOutput;
     const prevHeadingLevel = prev?.headingLevel;
-    updateObject(id, headingLevel !== undefined ? { text, headingLevel } : { text });
-    pushUndo({
-      description: 'Edit text',
-      undo: () => updateObject(id, { text: prevText, headingLevel: prevHeadingLevel }),
-    });
+    // Result stickies (non-prompt nodes with promptOutput) edit promptOutput, not text
+    const isPromptNode = (prev?.pills?.length ?? 0) > 0 || !!prev?.promptTemplate;
+    const isResultSticky = !isPromptNode && !!prev?.promptOutput;
+    if (isResultSticky) {
+      updateObject(id, { promptOutput: text });
+      pushUndo({
+        description: 'Edit text',
+        undo: () => updateObject(id, { promptOutput: prevPromptOutput }),
+      });
+    } else {
+      updateObject(id, headingLevel !== undefined ? { text, headingLevel } : { text });
+      pushUndo({
+        description: 'Edit text',
+        undo: () => updateObject(id, { text: prevText, headingLevel: prevHeadingLevel }),
+      });
+    }
     if (boardId) clearPersistedEditState(boardId);
     setEditingId(null);
     setRestoredDraft(null);
@@ -160,7 +195,92 @@ export function BoardView() {
     if (boardId) clearPersistedEditState(boardId);
     useBoardStore.getState().clearUndoStack();
     setBoardIdOverride(id);
+    // Update URL so refresh returns to this board
+    const url = new URL(window.location.href);
+    url.searchParams.set('board', id);
+    window.history.replaceState({}, '', url.toString());
   };
+
+  const handleSavePromptData = useCallback((id: string, data: { text: string; promptTemplate: string; pills: PillRef[] }) => {
+    const prev = objects[id];
+    const prevText = prev?.text;
+    const prevTemplate = prev?.promptTemplate;
+    const prevPills = prev?.pills;
+    const prevPromptOutput = prev?.promptOutput;
+    const prevApiConfig = prev?.apiConfig;
+    const hasPills = data.pills.length > 0;
+    // If pills still contain API-group pills, preserve apiConfig; otherwise clear it
+    const hasApiPills = data.pills.some((p) => p.apiGroup);
+    updateObject(id, {
+      text: data.text,
+      promptTemplate: hasPills ? data.promptTemplate : undefined,
+      pills: hasPills ? data.pills : undefined,
+      // Clear promptOutput so display switches to text for prompt nodes;
+      // also avoids stale data when a result sticky is converted to a prompt node.
+      promptOutput: undefined,
+      // Preserve apiConfig when API pills exist; clear when they've been removed
+      apiConfig: hasApiPills ? prev?.apiConfig : undefined,
+    });
+    pushUndo({
+      description: 'Edit prompt',
+      undo: () => updateObject(id, { text: prevText, promptTemplate: prevTemplate, pills: prevPills, promptOutput: prevPromptOutput, apiConfig: prevApiConfig }),
+    });
+    if (boardId) clearPersistedEditState(boardId);
+    setEditingId(null);
+    setRestoredDraft(null);
+  }, [objects, updateObject, pushUndo, boardId]);
+
+  const setChainRunning = useBoardStore((s) => s.setChainRunning);
+  const clearChainRunning = useBoardStore((s) => s.clearChainRunning);
+
+  const handleRunNow = useCallback(async (objectId: string) => {
+    // Save current prompt data first, then run after a short delay so
+    // Firebase write lands before the backend reads the object.
+    const promptSnap = latestPromptDataRef.current;
+    const obj = objects[objectId];
+    if (promptSnap && promptSnap.pills.length > 0) {
+      // Only write pill data when there ARE pills — never clear them during a run
+      updateObject(objectId, {
+        text: promptSnap.text,
+        promptTemplate: promptSnap.promptTemplate,
+        pills: promptSnap.pills,
+        ...(obj?.apiConfig ? { apiConfig: obj.apiConfig } : {}),
+      });
+      // Wait for Firebase write to propagate
+      await new Promise((r) => setTimeout(r, 500));
+    } else {
+      // No pill data to save — just ensure apiConfig is present before running
+      if (obj?.apiConfig) {
+        updateObject(objectId, { apiConfig: obj.apiConfig });
+      }
+    }
+
+    // Build execution chain (traces upstream to roots)
+    const chain = getExecutionChain(objectId, objects, wires);
+    console.log('[chain] target:', objectId, 'chain length:', chain.length,
+      'order:', chain.map((id) => objects[id]?.text?.slice(0, 25) ?? objects[id]?.apiConfig?.apiId ?? id.slice(0, 8)));
+
+    if (chain.length <= 1) {
+      // Single prompt — run directly (existing behavior)
+      void runPrompt(objectId);
+      return;
+    }
+
+    // Chain execution: run sequentially from roots to target.
+    // Each runPrompt() awaits the HTTP response, and the backend awaits all
+    // Firebase writes before responding — so data is in Firebase when we proceed.
+    setChainRunning(chain, chain[0]);
+    for (const stepId of chain) {
+      console.log('[chain] running step:', stepId, objects[stepId]?.text?.slice(0, 25) ?? objects[stepId]?.apiConfig?.apiId);
+      setChainRunning(chain, stepId);
+      const result = await runPrompt(stepId);
+      console.log('[chain] step done:', stepId, 'success:', result.success);
+      if (!result.success) break;
+      // Brief pause to let Firebase listeners propagate the write to other clients
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    clearChainRunning();
+  }, [objects, wires, updateObject, runPrompt, setChainRunning, clearChainRunning]);
 
   const handleDraftChange = (text: string) => {
     latestDraftRef.current = text;
@@ -183,17 +303,37 @@ export function BoardView() {
       const container = editOverlayContainerRef.current;
       if (container && target && container.contains(target)) return;
       const obj = objects[editingId];
-      const prevText = obj?.text;
-      const prevHeadingLevel = obj?.headingLevel;
-      const raw = latestDraftRef.current ?? obj?.text ?? '';
-      const text =
-        obj?.type === 'frame' ? (raw.trim() || 'Frame') : raw;
       const savedId = editingId;
-      updateObject(editingId, { text });
-      pushUndo({
-        description: 'Edit text',
-        undo: () => updateObject(savedId, { text: prevText, headingLevel: prevHeadingLevel }),
-      });
+
+      // PillEditor path: save prompt data (text + template + pills)
+      const promptSnap = latestPromptDataRef.current;
+      if (promptSnap) {
+        handleSavePromptData(savedId, promptSnap);
+        latestPromptDataRef.current = null;
+        return;
+      }
+
+      // Regular textarea path: save plain text (or promptOutput for result stickies)
+      const isPromptNode = (obj?.pills?.length ?? 0) > 0 || !!obj?.promptTemplate;
+      const isResultSticky = !isPromptNode && !!obj?.promptOutput;
+      const raw = latestDraftRef.current ?? (isResultSticky ? (obj?.promptOutput ?? '') : (obj?.text ?? ''));
+      if (isResultSticky) {
+        const prevOutput = obj?.promptOutput;
+        updateObject(editingId, { promptOutput: raw });
+        pushUndo({
+          description: 'Edit text',
+          undo: () => updateObject(savedId, { promptOutput: prevOutput }),
+        });
+      } else {
+        const prevText = obj?.text;
+        const prevHeadingLevel = obj?.headingLevel;
+        const text = obj?.type === 'frame' ? (raw.trim() || 'Frame') : raw;
+        updateObject(editingId, { text });
+        pushUndo({
+          description: 'Edit text',
+          undo: () => updateObject(savedId, { text: prevText, headingLevel: prevHeadingLevel }),
+        });
+      }
       clearPersistedEditState(boardId ?? '');
       setEditingId(null);
       setRestoredDraft(null);
@@ -204,7 +344,7 @@ export function BoardView() {
       document.removeEventListener('mousedown', handlePointerDown as (e: MouseEvent) => void, true);
       document.removeEventListener('touchstart', handlePointerDown as (e: TouchEvent) => void, true);
     };
-  }, [editingId, boardId, objects, updateObject, pushUndo]);
+  }, [editingId, boardId, objects, updateObject, pushUndo, handleSavePromptData]);
 
   if (!user) {
     return null;
@@ -267,6 +407,16 @@ export function BoardView() {
             userId={user.uid}
             userName={user.displayName ?? 'Anonymous'}
             onStickyNoteDoubleClick={handleStickyNoteDoubleClick}
+            onRunPrompt={handleRunNow}
+            objects={objects}
+            updateObject={updateObject}
+            createObject={createObject}
+            deleteObject={deleteObject}
+            wires={wires}
+            createWire={createWire}
+            updateWire={updateWire}
+            deleteWire={deleteWire}
+            deleteWiresForObject={deleteWiresForObject}
           />
           <div ref={editOverlayContainerRef} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
             <TextEditingOverlay
@@ -277,6 +427,11 @@ export function BoardView() {
               onCancel={handleEditCancel}
               onDraftChange={handleDraftChange}
               latestDraftRef={latestDraftRef}
+              wires={wires}
+              objects={objects}
+              onSavePromptData={handleSavePromptData}
+              latestPromptDataRef={latestPromptDataRef}
+              onSetApiConfig={(id, apiId) => updateObject(id, { apiConfig: { apiId } })}
             />
           </div>
           <CursorOverlay
