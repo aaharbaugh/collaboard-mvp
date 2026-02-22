@@ -42,17 +42,32 @@ interface MemoizedObjectGroupProps {
   /** Center position override during frame drag (world-space center x/y). */
   dragPos: { x: number; y: number } | undefined;
   toolMode: string;
-  /** Whether a connection is currently being drawn — disables drag on all objects. */
+  /** Whether a connection/wire is currently being drawn — disables drag on all objects. */
   hasDrawingConnection: boolean;
   zoomScale: number;
   userId: string;
   isMultiSelect: boolean;
+  /** Chain execution status for this object */
+  chainStatus?: 'queued' | 'running' | null;
   /** Stable handler refs — never change reference, so NOT included in areEqual. */
   handlers: MemoizedObjectGroupHandlers;
 }
 
+/** Deep-compare two pill arrays by checking each pill's key fields. */
+function pillsEqual(a: BoardObjectType['pills'], b: BoardObjectType['pills']): boolean {
+  const al = a?.length ?? 0;
+  const bl = b?.length ?? 0;
+  if (al !== bl) return false;
+  if (al === 0) return true;
+  for (let i = 0; i < al; i++) {
+    const ap = a![i], bp = b![i];
+    if (ap.id !== bp.id || ap.label !== bp.label || ap.node !== bp.node || ap.direction !== bp.direction || ap.parseMode !== bp.parseMode || ap.apiGroup !== bp.apiGroup) return false;
+  }
+  return true;
+}
+
 function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps): boolean {
-  // Fast path: same object ref and same selection/hover → skip full compare (avoids re-render on other objects’ click)
+  // Fast path: same object ref and same selection/hover → skip full compare (avoids re-render on other objects' click)
   if (
     prev.obj === next.obj &&
     prev.isSelected === next.isSelected &&
@@ -62,7 +77,8 @@ function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps
     prev.toolMode === next.toolMode &&
     prev.hasDrawingConnection === next.hasDrawingConnection &&
     prev.isMultiSelect === next.isMultiSelect &&
-    prev.zoomScale === next.zoomScale
+    prev.zoomScale === next.zoomScale &&
+    prev.chainStatus === next.chainStatus
   ) {
     return true;
   }
@@ -77,6 +93,10 @@ function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps
   if (a.type !== b.type) return false;
   if (a.selectedBy !== b.selectedBy) return false;
   if (a.frameId !== b.frameId) return false;
+  if (a.promptOutput !== b.promptOutput) return false;
+  if (a.lastRunStatus !== b.lastRunStatus) return false;
+  if (!pillsEqual(a.pills, b.pills)) return false;
+  if (a.apiConfig?.apiId !== b.apiConfig?.apiId) return false;
   if (prev.isSelected !== next.isSelected) return false;
   if (prev.showAnchors !== next.showAnchors) return false;
   if (prev.showSelectionBorder !== next.showSelectionBorder) return false;
@@ -85,6 +105,7 @@ function areEqual(prev: MemoizedObjectGroupProps, next: MemoizedObjectGroupProps
   if (prev.hasDrawingConnection !== next.hasDrawingConnection) return false;
   if (prev.isMultiSelect !== next.isMultiSelect) return false;
   if (prev.zoomScale !== next.zoomScale) return false;
+  if (prev.chainStatus !== next.chainStatus) return false;
   return true;
 }
 
@@ -99,6 +120,7 @@ export const MemoizedObjectGroup = React.memo(function MemoizedObjectGroup({
   zoomScale,
   userId,
   isMultiSelect,
+  chainStatus,
   handlers,
 }: MemoizedObjectGroupProps) {
   const w  = obj.width  ?? 0;
@@ -107,6 +129,7 @@ export const MemoizedObjectGroup = React.memo(function MemoizedObjectGroup({
   const oy = obj.y ?? 0;
   const cx = dragPos ? dragPos.x : ox + w / 2;
   const cy = dragPos ? dragPos.y : oy + h / 2;
+  const isWiringMode = toolMode === 'wire';
 
   return (
     <Group
@@ -133,13 +156,16 @@ export const MemoizedObjectGroup = React.memo(function MemoizedObjectGroup({
         showSelectionBorder={showSelectionBorder}
         remoteSelectedBy={obj.selectedBy && obj.selectedBy !== userId ? (obj.selectedByName ?? undefined) : undefined}
         zoomScale={zoomScale}
+        chainStatus={chainStatus}
       />
       <AnchorPoints
         width={obj.width}
         height={obj.height}
-        visible={showAnchors}
+        visible={showAnchors || isWiringMode}
         zoomScale={zoomScale}
         objectType={obj.type}
+        wiringMode={isWiringMode}
+        pills={obj.pills}
         onAnchorMouseDown={(anchor) => handlers.onAnchorMouseDown(obj.id, anchor)}
         onAnchorMouseUp={(anchor) => handlers.onAnchorMouseUp(obj.id, anchor)}
       />

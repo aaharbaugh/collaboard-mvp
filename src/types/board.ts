@@ -19,6 +19,55 @@ export interface BoardObject {
   sentToBack?: boolean;
   /** When set, this object belongs to the frame with this id; it moves/resizes with the frame */
   frameId?: string;
+  /** Prompt template with {pill:ID} tokens for wiring mode */
+  promptTemplate?: string;
+  /** Pill references for wiring mode */
+  pills?: PillRef[];
+  /** LLM output from last prompt run */
+  promptOutput?: string;
+  /** Whether this prompt node is enabled for execution */
+  enabled?: boolean;
+  /** Timestamp of last prompt run */
+  lastRunAt?: number;
+  /** Status of last prompt run */
+  lastRunStatus?: 'success' | 'error' | 'running';
+  /** Error message from last prompt run */
+  lastRunError?: string;
+  /** API lookup config — marks this sticky as an API node */
+  apiConfig?: { apiId: string };
+}
+
+export interface PillRef {
+  id: string;
+  label: string;
+  /** Node position 1-8 on object edges (clockwise from top) */
+  node: number;
+  direction: 'in' | 'out';
+  /** For output pills: how output is routed to wired targets */
+  outputMode?: WireOutputMode;
+  /** For output pills: max characters the LLM should condense output to */
+  maxChars?: number;
+  /** For input pills: 'list' = fan-out per line, 'whole' = pass all text as one block */
+  parseMode?: 'list' | 'whole';
+  /** API group id — marks this pill as part of an API block (e.g., 'weather') */
+  apiGroup?: string;
+}
+
+export type WireOutputMode = 'update' | 'append' | 'create';
+
+export interface Wire {
+  id: string;
+  fromObjectId: string;
+  fromNode: number;
+  toObjectId: string;
+  toNode: number;
+  color?: string;
+  /** How output is routed to the target: overwrite, append, or create new sticky */
+  outputMode?: WireOutputMode;
+  /** Intermediate waypoints as flat [x1,y1, x2,y2, ...] world coordinates */
+  points?: number[];
+  createdBy: string;
+  createdAt: number;
 }
 
 export type AnchorPosition = 'top' | 'bottom' | 'left' | 'right'
@@ -56,4 +105,5 @@ export interface Board {
   objects: Record<string, BoardObject>;
   cursors: Record<string, Cursor>;
   connections: Record<string, Connection>;
+  wires: Record<string, Wire>;
 }

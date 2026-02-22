@@ -6,7 +6,7 @@ export interface UndoEntry {
   undo: () => void | Promise<void>;
 }
 
-export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'text' | 'frame';
+export type ToolMode = 'select' | 'move' | 'stickyNote' | 'rectangle' | 'circle' | 'star' | 'text' | 'frame' | 'wire';
 
 /** Order for the Shape [3] cycle: Circle -> Rectangle -> Star */
 export const SHAPE_CYCLE: ToolMode[] = ['circle', 'rectangle', 'star'];
@@ -18,6 +18,13 @@ export interface Viewport {
   x: number;
   y: number;
   scale: number;
+}
+
+export interface DrawingWire {
+  fromObjectId: string;
+  fromNode: number;
+  currentPoint: { x: number; y: number };
+  waypoints: { x: number; y: number }[];
 }
 
 interface BoardStore {
@@ -38,6 +45,17 @@ interface BoardStore {
   pushUndo: (entry: UndoEntry) => void;
   popUndo: () => UndoEntry | undefined;
   clearUndoStack: () => void;
+
+  drawingWire: DrawingWire | null;
+  setDrawingWire: (wire: DrawingWire | null) => void;
+
+  runningPromptId: string | null;
+  setRunningPromptId: (id: string | null) => void;
+
+  chainRunningIds: Set<string>;
+  chainCurrentId: string | null;
+  setChainRunning: (ids: string[], currentId: string | null) => void;
+  clearChainRunning: () => void;
 }
 
 export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) => ({
@@ -77,4 +95,15 @@ export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) =>
     return top;
   },
   clearUndoStack: () => set({ undoStack: [] }),
+
+  drawingWire: null,
+  setDrawingWire: (wire) => set({ drawingWire: wire }),
+
+  runningPromptId: null,
+  setRunningPromptId: (id) => set({ runningPromptId: id }),
+
+  chainRunningIds: new Set<string>(),
+  chainCurrentId: null,
+  setChainRunning: (ids, currentId) => set({ chainRunningIds: new Set(ids), chainCurrentId: currentId }),
+  clearChainRunning: () => set({ chainRunningIds: new Set<string>(), chainCurrentId: null }),
 })));

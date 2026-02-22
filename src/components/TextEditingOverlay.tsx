@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import type { BoardObject } from '../types/board';
+import type { BoardObject, Wire, PillRef } from '../types/board';
 import { computeTextLayout } from '../lib/textParser';
-import { MIN_READABLE_FONT_SCREEN_PX } from '../lib/constants';
+import { PillEditor } from '../features/wiring/PillEditor';
+import type { PromptDataSnapshot } from '../features/wiring/PillEditor';
 
 const DRAFT_PERSIST_DEBOUNCE_MS = 400;
 
@@ -14,6 +15,16 @@ interface TextEditingOverlayProps {
   onDraftChange?: (text: string) => void;
   /** Ref updated on every keystroke so parent can read latest draft when saving on click-outside */
   latestDraftRef?: React.MutableRefObject<string>;
+  /** Wires on the board (for pill context) */
+  wires?: Record<string, Wire>;
+  /** All board objects (for pill context) */
+  objects?: Record<string, BoardObject>;
+  /** Callback to save prompt data (template, pills) */
+  onSavePromptData?: (id: string, data: { text: string; promptTemplate: string; pills: PillRef[] }) => void;
+  /** Ref kept up-to-date with PillEditor's latest serialized content for save-on-click-outside */
+  latestPromptDataRef?: React.MutableRefObject<PromptDataSnapshot | null>;
+  /** Callback to set apiConfig on an object (triggered by >> API lookup in PillEditor) */
+  onSetApiConfig?: (id: string, apiId: string) => void;
 }
 
 export function TextEditingOverlay({
@@ -24,15 +35,22 @@ export function TextEditingOverlay({
   onCancel,
   onDraftChange,
   latestDraftRef,
+  wires,
+  objects,
+  onSavePromptData,
+  latestPromptDataRef,
+  onSetApiConfig,
 }: TextEditingOverlayProps) {
   const isFrame = obj?.type === 'frame';
+  // Non-prompt result stickies display promptOutput; use it as the editable text
+  const getDisplayText = (o: BoardObject | null) => {
+    if (!o) return '';
+    if (o.type === 'frame') return o.text?.trim() ?? 'Frame';
+    const isPrompt = (o.pills?.length ?? 0) > 0 || !!o.promptTemplate;
+    return isPrompt ? (o.text ?? '') : (o.promptOutput ?? o.text ?? '');
+  };
   const [text, setText] = useState(
-    () =>
-      initialDraft !== undefined
-        ? initialDraft
-        : isFrame
-          ? (obj?.text?.trim() ?? 'Frame')
-          : (obj?.text ?? '')
+    () => initialDraft !== undefined ? initialDraft : getDisplayText(obj)
   );
   const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
@@ -46,12 +64,7 @@ export function TextEditingOverlay({
     }
     if (openedIdRef.current !== obj.id) {
       openedIdRef.current = obj.id;
-      const next =
-        initialDraft !== undefined
-          ? initialDraft
-          : obj.type === 'frame'
-            ? (obj.text?.trim() ?? 'Frame')
-            : (obj.text ?? '');
+      const next = initialDraft !== undefined ? initialDraft : getDisplayText(obj);
       setText(next);
       if (latestDraftRef) latestDraftRef.current = next;
       setTimeout(() => inputRef.current?.focus(), 0);
@@ -170,11 +183,9 @@ export function TextEditingOverlay({
   }
 
   const minScreenDim = Math.min(screenW, screenH);
-  const layout = computeTextLayout(text, Math.max(1, screenW), Math.max(1, screenH), {
-    minReadableFont: MIN_READABLE_FONT_SCREEN_PX,
-  });
-  const screenFontSize = layout.fontSize;
-  const screenPadding = layout.padding;
+  const layout = computeTextLayout(text, Math.max(1, obj.width), Math.max(1, obj.height), { maxFontSize: 16 });
+  const screenFontSize = layout.fontSize * scale;
+  const screenPadding = layout.padding * scale;
 
   if (!Number.isFinite(screenW) || !Number.isFinite(screenH) || screenW < 1 || screenH < 1) {
     return null;
@@ -193,7 +204,7 @@ export function TextEditingOverlay({
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Escape') {
-      setText(obj.text ?? '');
+      setText(getDisplayText(obj));
       onCancel();
     }
   };
@@ -203,12 +214,86 @@ export function TextEditingOverlay({
     onCancel();
   };
 
-  const textAreaW = Math.max(1, screenW - screenPadding * 2);
-  const textAreaH = Math.max(1, screenH - screenPadding * 2);
   const inset = 8;
-  // Bottom-right corner inside the textarea (anchor at corner, then shift so button sits inside)
-  const doneAnchorX = screenX + screenPadding + textAreaW - inset;
-  const doneAnchorY = screenY + screenPadding + textAreaH - inset;
+  // Bottom-right corner inside the sticky (anchor at corner, then shift so button sits inside)
+  const doneAnchorX = screenX + screenW - inset;
+  const doneAnchorY = screenY + screenH - inset;
+
+  // Use PillEditor for all stickies/text so any sticky can become a smart sticky by typing {pill}.
+  const usePillEditor = (obj.type === 'stickyNote' || obj.type === 'text') && !!onSavePromptData;
+
+  if (usePillEditor) {
+    // Cover the entire sticky note so Konva text underneath is hidden
+    const bgColor = obj.type === 'stickyNote'
+      ? (obj.color ?? '#e6d070')
+      : obj.type === 'text'
+        ? '#f4f0e8'
+        : '#f4f0e8';
+    const borderRadius = Math.max(0, Math.min(8, minScreenDim * 0.02));
+
+    return (
+      <div
+        className="text-editing-overlay"
+        style={{
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          right: 0,
+          bottom: 0,
+          pointerEvents: 'none',
+          zIndex: 5,
+        }}
+      >
+        <div
+          ref={toolbarRef}
+          style={{
+            position: 'absolute',
+            left: screenX,
+            top: screenY,
+            width: screenW,
+            height: screenH,
+            display: 'flex',
+            flexDirection: 'column',
+            pointerEvents: 'auto',
+            background: bgColor,
+            borderRadius,
+          }}
+          onMouseDown={(e) => {
+            e.stopPropagation();
+          }}
+        >
+          <PillEditor
+            initialText={getDisplayText(obj)}
+            initialPills={obj.pills ?? []}
+            objectId={obj.id}
+            onSave={(result) => {
+              onSavePromptData!(obj.id, result);
+              onCancel();
+            }}
+            onCancel={onCancel}
+            latestDataRef={latestPromptDataRef}
+            onSetApiConfig={onSetApiConfig ? (apiId) => onSetApiConfig(obj.id, apiId) : undefined}
+            style={{
+              flex: 1,
+              width: '100%',
+              boxSizing: 'border-box',
+              border: 'none',
+              background: 'transparent',
+              fontFamily: '"Courier New", Courier, monospace',
+              fontSize: screenFontSize,
+              lineHeight: 1.3,
+              overflow: 'auto',
+              whiteSpace: 'pre-wrap',
+              wordWrap: 'break-word',
+              padding: `${screenPadding}px`,
+              outline: 'none',
+              color: '#2c2416',
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -236,12 +321,12 @@ export function TextEditingOverlay({
         onKeyDown={handleKeyDown}
         style={{
           position: 'absolute',
-          left: screenX + screenPadding,
-          top: screenY + screenPadding,
-          width: textAreaW,
-          height: textAreaH,
+          left: screenX,
+          top: screenY,
+          width: screenW,
+          height: screenH,
           boxSizing: 'border-box',
-          padding: 0,
+          padding: screenPadding,
           margin: 0,
           border: '1px solid rgba(74,124,89,0.5)',
           borderRadius: Math.max(0, Math.min(8, minScreenDim * 0.02)),
@@ -253,6 +338,7 @@ export function TextEditingOverlay({
           whiteSpace: 'pre-wrap',
           wordWrap: 'break-word',
           pointerEvents: 'auto',
+          background: obj.type === 'stickyNote' ? (obj.color ?? '#e6d070') : 'transparent',
         }}
       />
       <div

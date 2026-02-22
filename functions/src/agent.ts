@@ -254,8 +254,10 @@ export async function runAgentCommand(
     await withTrace(() => rootRun!.postRun());
   }
 
+  const { prompt: systemPrompt, aliasMap } = buildSystemPrompt(boardState, { viewport: viewport ?? undefined, selectedIds: selectedIds?.length ? selectedIds : undefined });
+
   const messages: OpenAI.ChatCompletionMessageParam[] = [
-    { role: 'system', content: buildSystemPrompt(boardState, { viewport: viewport ?? undefined, selectedIds: selectedIds?.length ? selectedIds : undefined }) },
+    { role: 'system', content: systemPrompt },
     { role: 'user', content: command },
   ];
 
@@ -372,7 +374,8 @@ export async function runAgentCommand(
           if (toolRun) await withTrace(() => toolRun!.postRun());
           if (!result) {
             try {
-              result = await dispatchTool(tc.function.name, args, boardId, userId, objectCache);
+              const resolved = resolveAliases(args, aliasMap.toReal) as Record<string, unknown>;
+              result = await dispatchTool(tc.function.name, resolved, boardId, userId, objectCache);
               collectCreatedIds(tc.function.name, result, tracker);
             } catch (err: unknown) {
               result = { error: String(err) };
@@ -435,6 +438,24 @@ export async function runAgentCommand(
 // Firebase Callable export
 // ---------------------------------------------------------------------------
 
+
+// ---------------------------------------------------------------------------
+// Alias resolution — converts short aliases (o0, o1…) back to real Firebase UUIDs
+// ---------------------------------------------------------------------------
+
+/** Recursively resolve any alias strings in a value tree. */
+function resolveAliases(value: unknown, toReal: Record<string, string>): unknown {
+  if (typeof value === 'string') return toReal[value] ?? value;
+  if (Array.isArray(value)) return value.map(v => resolveAliases(v, toReal));
+  if (value && typeof value === 'object') {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      out[k] = resolveAliases(v, toReal);
+    }
+    return out;
+  }
+  return value;
+}
 
 // ---------------------------------------------------------------------------
 // Tool dispatcher
@@ -635,11 +656,25 @@ async function dispatchTool(
 // System prompt
 // ---------------------------------------------------------------------------
 
+/** Maps short aliases (o0, o1…) ↔ real Firebase UUIDs to shrink the prompt. */
+type AliasMap = { toReal: Record<string, string>; toAlias: Record<string, string> };
+
 function buildSpatialBoardStateText(
   boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> },
   /** When provided, positions are shown as signed offsets from this point (reduces digit count on large canvases). */
   origin?: { x: number; y: number }
-): string {
+): { text: string; aliasMap: AliasMap } {
+  const toReal: Record<string, string> = {};   // alias → uuid
+  const toAlias: Record<string, string> = {};   // uuid → alias
+  let aliasIdx = 0;
+  const alias = (uuid: string): string => {
+    if (toAlias[uuid]) return toAlias[uuid];
+    const a = `o${aliasIdx++}`;
+    toAlias[uuid] = a;
+    toReal[a] = uuid;
+    return a;
+  };
+
   // Snap to nearest N to reduce digit noise
   const snap10 = (v: number) => Math.round(v / 10) * 10;
   const snap5  = (v: number) => Math.round(v / 5) * 5;
@@ -690,7 +725,7 @@ function buildSpatialBoardStateText(
         ? `bbox(${relStr(gMinX,origin.x)},${relStr(gMinY,origin.y)})→(${relStr(gMaxX,origin.x)},${relStr(gMaxY,origin.y)})`
         : `bbox(${snap10(gMinX)},${snap10(gMinY)})→(${snap10(gMaxX)},${snap10(gMaxY)})`;
       const colorStr = g.color ? ` ${g.color}` : '';
-      const ids = g.members.map(m => m.id).join(',');
+      const ids = g.members.map(m => alias(m.id)).join(',');
       objectLines.push(`  [${g.members.length}x ${g.type} ${g.w}x${g.h}${colorStr} ${boxStr} ids=${ids}]`);
     } else {
       // Show each member individually
@@ -700,14 +735,14 @@ function buildSpatialBoardStateText(
         const posStr = origin
           ? `(${relStr(m.x, origin.x)},${relStr(m.y, origin.y)})`
           : `(${snap10(m.x)},${snap10(m.y)})`;
-        objectLines.push(`  [${g.type} ${text}id=${m.id} @ ${posStr} ${g.w}x${g.h}${colorStr}]`);
+        objectLines.push(`  [${g.type} ${text}id=${alias(m.id)} @ ${posStr} ${g.w}x${g.h}${colorStr}]`);
       }
     }
   }
 
   const connLines = connValues.map((c) => {
-    const from = String(c['fromId'] ?? '');
-    const to = String(c['toId'] ?? '');
+    const from = alias(String(c['fromId'] ?? ''));
+    const to = alias(String(c['toId'] ?? ''));
     const fromA = c['fromAnchor'] ? ` (${String(c['fromAnchor'])}` : '';
     const toA = c['toAnchor'] ? `→${String(c['toAnchor'])})` : '';
     return `  ${from} → ${to}${fromA}${toA}`;
@@ -743,19 +778,21 @@ function buildSpatialBoardStateText(
     ? `Objects (${objValues.length}) — positions are ±offsets from viewport center:`
     : `Objects (${objValues.length}):`;
 
-  return [
+  const text = [
     header,
     ...objectLines,
     `Connections (${connValues.length}):`,
     ...connLines,
     occupiedLine,
   ].join('\n');
+
+  return { text, aliasMap: { toReal, toAlias } };
 }
 
 function buildSystemPrompt(
   boardState: { objects: Record<string, unknown>; connections: Record<string, unknown> },
   options?: { viewport?: { x: number; y: number; scale: number; width?: number; height?: number }; selectedIds?: string[] }
-): string {
+): { prompt: string; aliasMap: AliasMap } {
   const objCount = Object.keys(boardState.objects).length;
   const connCount = Object.keys(boardState.connections).length;
 
@@ -778,21 +815,26 @@ function buildSystemPrompt(
 Viewport center (ABSOLUTE): (${cx}, ${cy}) | Visible: x ${left}–${right}, y ${top}–${bottom}
 Board state positions are ±offsets from this center. Tool call coords MUST be absolute:
   abs_x = ${cx} + rel_x  |  abs_y = ${cy} + rel_y
-Default anchor for new content: (${Math.round(cx - 80)}, ${Math.round(cy - 60)}).`;
+Default anchor for new content: (${Math.round(cx - 80)}, ${Math.round(cx - 60)}).`;
   }
 
-  const stateBlock = buildSpatialBoardStateText(boardState, stateOrigin);
+  const { text: stateBlock, aliasMap } = buildSpatialBoardStateText(boardState, stateOrigin);
 
-  // Selection context
+  // Selection context — use aliases for selected IDs
   let selectionSection = '';
   if (options?.selectedIds?.length) {
+    const aliasedIds = options.selectedIds.map(id => aliasMap.toAlias[id] ?? id);
     selectionSection = `
 === SELECTED OBJECTS ===
-${options.selectedIds.join(', ')}
+${aliasedIds.join(', ')}
 Operations like "delete", "move", "change color" apply to these IDs unless told otherwise.`;
   }
 
-  return `You are the AI agent for CollabBoard. Respond ONLY with tool calls (one short confirmation when done).
+  const prompt = `You are the AI agent for CollabBoard. Respond ONLY with tool calls (one short confirmation when done).
+
+=== IDS ===
+Board objects use short aliases (o0, o1, …). Use these aliases in ALL tool calls when referencing existing objects.
+The server resolves them automatically. tempIds in executePlan (s1, f1, …) work as before.
 
 === BEHAVIOR ===
 NEVER ask clarifying questions. ALWAYS act immediately using sensible defaults:
@@ -823,82 +865,38 @@ x = anchor_x + col*(w+80)  |  y = anchor_y + row*(h+80)
 Frame bounds: x=min(child_x)-40, y=min(child_y)-50, w/h=span+80
 
 === COMPOUND TOOLS (prefer these — ONE call instead of 7+) ===
-• SWOT / 2×2 matrix → createQuadrant({ title, quadrantLabels: { topLeft, topRight, bottomLeft, bottomRight }, items: { topLeft: [...], ... }, anchorX: cx, anchorY: cy })
-• Kanban / retro / journey map → createColumnLayout({ title, columns: [{ title, items: [...] }, ...], anchorX: cx, anchorY: cy })
-• Flowchart / sequence diagram → createDiagram({ nodes: [{ label }, ...], edges: [{ from: 0, to: 1 }, ...], layout: "horizontal"|"vertical", anchorX: cx, anchorY: cy })
-• 5+ identical objects → createMany({ objectType, count, layout:"grid"|"row"|"column"|"circle", anchorX, anchorY, color, gap })
-  Server computes ALL coordinates — do NOT pass x/y per item. Add containerId to pack inside an existing object.
-• Arrange existing objects INTO a container → arrangeWithin({ objectIds:[...], containerId, layout:"grid", resizeToFit:true })
-  Server reads real dimensions, packs tightly, resizes container. One call replaces moveBatch+resizeObject.
-All create frame + content + frameId + fit in one atomic write. Use viewport center for anchorX/anchorY when given.
-
-=== LAYOUTS (when NOT using compound tools; cx,cy = viewport center) ===
-Flowchart H: nodes at (cx-N*140+i*280, cy) 200×120, connectInSequence
-Flowchart V: nodes at (cx, cy-N*100+i*200) 200×120, connectInSequence
-SWOT: use createQuadrant. Kanban: use createColumnLayout. Flowchart: use createDiagram.
-Mind map: center node + branches at radius 300, angles 0,60,120,180,240,300°
-
-=== LAYERS ===
-setLayer(id, sentToBack=true) = behind arrows | addToFrame(ids, frameId) = group children
-
-=== COLORS ===
-Backgrounds: ${agentTools.BOARD_PALETTE_HEX.join(' ')}
-green=positive  rose=negative  blue=neutral  yellow=highlight  peach=warning  mint/lavender/grey=accent
+• SWOT / 2×2 matrix → createQuadrant({ title, quadrantLabels, items, anchorX, anchorY })
+• Kanban / retro → createColumnLayout({ title, columns: [{ title, items }], anchorX, anchorY })
+• Flowchart → createDiagram({ nodes: [{ label }], edges: [{ from, to }], layout, anchorX, anchorY })
+• 5+ identical → createMany({ objectType, count, layout, anchorX, anchorY, color, gap, containerId })
+• Arrange into container → arrangeWithin({ objectIds, containerId, layout, resizeToFit })
 
 === WORKFLOW ===
 Round 1: executePlan({objects, connections})
-  • ALL creation in one call. objects:[] is valid for connection-only commands.
-  • Each object MUST have: tempId, action, AND params:{x,y,...} — params is REQUIRED.
-    createStickyNote params: {text, x, y, color}
-    createShape params:      {type:"rectangle"|"circle"|"star", x, y, width, height, color}
-    createFrame params:      {title, x, y, width, height}
-    createText params:       {text, x, y, width, height, color}
-  • connections[]: fromId/toId = tempId or existing Firebase ID from board state above.
+  • objects[]: tempId + action + params:{x,y,...}
+    actions: createStickyNote|createShape|createFrame|createText
+  • connections[]: fromId/toId = tempId or alias from board state
   • Returns {idMap:{tempId→actualId}, connectionIds}
-Round 2 — REQUIRED when frames were created: call addToFrame(childIds, frameId) for EVERY
-  frame created. Use idMap values (actual IDs) not tempIds. Also use Round 2 for:
-  moveBatch / fitFrameToContents / setLayer / rotateObject / deleteObjects
-Round 3: one short text confirmation, no tool calls.
+Round 2 (if frames): addToFrame(childIds, frameId). Also: moveBatch / fitFrameToContents / setLayer / deleteObjects
+Round 3: one short text confirmation.
 
 === RULES ===
-• PREFER compound tools for templates: createQuadrant (SWOT/matrix), createColumnLayout (kanban/retro), createDiagram (flowchart). One call = one round-trip.
-• BULK CREATION: When creating 5+ copies of the same object type, ALWAYS use createMany — never list 50 objects in executePlan. The LLM must NOT compute coordinates for bulk objects; the server does it.
-• ARRANGE INTO CONTAINER: When user says "arrange [selection] within/inside [X]", use arrangeWithin({objectIds:[...non-container IDs...], containerId:"...", layout:"grid", resizeToFit:true}). Do NOT use moveBatch with manual coordinates for this case.
-• For freeform creation use executePlan (objects + connections in one call).
-• FRAMES: when using executePlan, every frame MUST have addToFrame called in Round 2 with its child object IDs. Compound tools set frameId automatically.
-  Failure to call addToFrame = children will not move with the frame.
-• Place ALL new objects inside the visible viewport area shown above.
-• COORDINATES: All x/y in tool calls are ABSOLUTE world coords. Board state shows relative
-  offsets (±N) — convert before using: abs_x = viewport_cx + rel_x, abs_y = viewport_cy + rel_y.
-• EXACT COORDS: If user says "at position X, Y" or "at X, Y", use those exact numbers verbatim as x and y params. Do NOT adjust for viewport.
-• SHAPE DEFAULTS: rectangle = width:200, height:120. circle = width:120, height:120.
-• BATCH MOVE: ALWAYS use moveBatch([{id,x,y},...]) instead of multiple moveObject calls.
-  One moveBatch call handles all moves atomically — never loop moveObject one-by-one.
-• ARRANGE IN GRID: Sort objects by x then y. Compute cols=ceil(sqrt(N)), rows=ceil(N/cols).
-  cellW=obj.width+gap, cellH=obj.height+gap. Anchor at min(x), min(y) of selection.
-  Call moveBatch with all computed positions in one call.
-• SPACE EVENLY: Sort by axis (horizontal → by x, vertical → by y). Distribute positions
-  between first and last object position. Call moveBatch with all positions.
-• ARRANGE WITHIN CONTAINER: When user says "arrange [items] within/inside [X]":
-  1. IDENTIFY CONTAINER: the object the user named/described (e.g. "the blue sticky note",
-     "the frame"). Read its id, x_c, y_c, w_c, h_c from board state.
-  2. ITEMS = all other selected objects (NOT the container itself).
-  3. Use gap=8px. avg_item_w and avg_item_h from item dimensions (or type defaults).
-     cols = max(1, floor((w_c - 40) / (avg_item_w + gap)))
-     rows = ceil(N / cols)
-     needed_h = rows * (avg_item_h + gap) + 40
-  4. If needed_h > h_c OR cols * (avg_item_w + gap) + 40 > w_c:
-     → Call resizeObject(containerId, max(w_c, cols*(avg_item_w+gap)+40), needed_h) FIRST
-       to make the container large enough to hold all items.
-  5. Place items row-by-row starting from top-left interior (x_c+20, y_c+20):
-     item_x = x_c + 20 + col_i * (avg_item_w + gap)
-     item_y = y_c + 20 + row_i * (avg_item_h + gap)
-  6. Call moveBatch with ALL computed positions in one call.
-  7. If container is a frame, also call addToFrame(itemIds, containerId).
-• FIT FRAME: Use fitFrameToContents(frameId) when user asks to "resize frame to fit contents".
-• DELETE: deleteObjects(objectIds). "Delete selection" = use Selected Object IDs above.
-• Do NOT call getBoardState unless critical data is missing from the board state above.
-• Target 1 tool-call round. 2 maximum when frames or batch moves are involved.`;
+• PREFER compound tools for templates. One call = one round-trip.
+• 5+ copies → createMany (server computes coords).
+• "arrange within/inside" → arrangeWithin.
+• FRAMES: addToFrame in Round 2 for every frame created via executePlan.
+• COORDINATES: All x/y in tool calls are ABSOLUTE. Board state ±offsets → abs = viewport_cx + rel.
+• EXACT COORDS: "at position X, Y" → use verbatim, no viewport adjustment.
+• BATCH MOVE: moveBatch([{id,x,y},...]) — never loop moveObject.
+• DELETE: deleteObjects(objectIds). "Delete selection" = use selected IDs above.
+• Do NOT call getBoardState unless critical data is missing.
+• Target 1 tool-call round. 2 max when frames or batch moves needed.
+
+=== COLORS ===
+${agentTools.BOARD_PALETTE_HEX.join(' ')}
+green=positive rose=negative blue=neutral yellow=highlight peach=warning mint/lavender/grey=accent`;
+
+  return { prompt, aliasMap };
 }
 
 // ---------------------------------------------------------------------------

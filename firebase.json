@@ -30,6 +30,11 @@
         "region": "us-central1"
       },
       {
+        "source": "/api/prompt",
+        "function": "executePromptNode",
+        "region": "us-central1"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

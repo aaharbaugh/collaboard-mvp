@@ -1,7 +1,8 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX, MIN_READABLE_FONT_SCREEN_PX } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX } from '../../../../lib/constants';
 import { computeTextLayout, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
+import { PillOverlays } from '../../../wiring/PillOverlays';
 
 interface TextElementProps {
   obj: BoardObject;
@@ -28,22 +29,22 @@ export function TextElement({
   const sw = 2 / zoomScale;
   const hasStroke = (showSelectionBorder && isSelected) || !!remoteSelectedBy;
 
-  const rawText = obj.text ?? '';
+  const pills = obj.pills ?? [];
+  const isPromptNode = pills.length > 0 || !!obj.promptTemplate;
+  // Prompt nodes show their template text. Output always goes to a separate result sticky.
+  // Non-prompt nodes show promptOutput if they received one via a wire.
+  const displayText = isPromptNode ? (obj.text ?? '') : (obj.promptOutput ?? obj.text ?? '');
+  const rawText = displayText;
   const w = Math.max(0, obj.width);
   const h = Math.max(0, obj.height);
-  const scale = Math.max(1e-10, zoomScale);
-  const screenW = w * scale;
-  const screenH = h * scale;
+  const screenW = w * zoomScale;
 
-  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), {
-    minReadableFont: MIN_READABLE_FONT_SCREEN_PX / scale,
-  });
+  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), { maxFontSize: 16 });
   const { fontSize, padding, wrappedLines } = layout;
   const lineHeight = fontSize * LINE_HEIGHT_RATIO;
 
-  const bigEnoughToRender = screenW >= MIN_RENDER_SCREEN_PX && screenH >= MIN_RENDER_SCREEN_PX && fontSize >= 0.5;
   const hasContent = rawText.length > 0;
-  const showText = bigEnoughToRender && w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
+  const showText = w >= 1 && h >= 1 && hasContent && Number.isFinite(fontSize) && fontSize > 0;
 
   const textColor = obj.color ?? DEFAULT_OBJECT_COLORS.text;
 
@@ -67,21 +68,70 @@ export function TextElement({
         dash={showSelectionBorder && isSelected ? [6 / zoomScale, 3 / zoomScale] : undefined}
         cornerRadius={2 / zoomScale}
       />
-      {showText &&
-        wrappedLines.map((lineText, i) => (
-          <Text
-            key={i}
-            x={padding}
-            y={padding + i * lineHeight}
-            width={Math.max(1, w - padding * 2)}
-            text={lineText}
-            fontSize={fontSize}
-            fontFamily='"Courier New", Courier, monospace'
-            fill={textColor}
-            wrap="none"
-            listening={false}
-          />
-        ))}
+      {showText && (
+        <>
+          {wrappedLines.map((lineText, i) => (
+            <Text
+              key={i}
+              x={padding}
+              y={padding + i * lineHeight}
+              width={Math.max(1, w - padding * 2)}
+              text={lineText}
+              fontSize={fontSize}
+              fontFamily='"Courier New", Courier, monospace'
+              fill={textColor}
+              wrap="none"
+              listening={false}
+            />
+          ))}
+          {pills.length > 0 && (
+            <PillOverlays
+              wrappedLines={wrappedLines}
+              pills={pills}
+              fontSize={fontSize}
+              padding={padding}
+              lineHeight={lineHeight}
+            />
+          )}
+        </>
+      )}
+      {/* Smart node: top accent bar */}
+      {isPromptNode && screenW >= MIN_RENDER_SCREEN_PX && (
+        <Rect
+          x={0}
+          y={0}
+          width={w}
+          height={Math.max(3 / zoomScale, 3)}
+          fill="#6b8e9b"
+          cornerRadius={[2 / zoomScale, 2 / zoomScale, 0, 0]}
+          listening={false}
+        />
+      )}
+      {/* Smart node: bottom accent bar */}
+      {isPromptNode && screenW >= MIN_RENDER_SCREEN_PX && (
+        <Rect
+          x={0}
+          y={h - Math.max(3 / zoomScale, 3)}
+          width={w}
+          height={Math.max(3 / zoomScale, 3)}
+          fill="#6b8e9b"
+          cornerRadius={[0, 0, 2 / zoomScale, 2 / zoomScale]}
+          listening={false}
+        />
+      )}
+      {/* Running indicator: pulsing border */}
+      {isPromptNode && obj.lastRunStatus === 'running' && screenW >= MIN_RENDER_SCREEN_PX && (
+        <Rect
+          x={-1 / zoomScale}
+          y={-1 / zoomScale}
+          width={w + 2 / zoomScale}
+          height={h + 2 / zoomScale}
+          stroke="#6b8e9b"
+          strokeWidth={2 / zoomScale}
+          dash={[6 / zoomScale, 4 / zoomScale]}
+          listening={false}
+        />
+      )}
       {remoteSelectedBy && (
         <Text
           x={0}

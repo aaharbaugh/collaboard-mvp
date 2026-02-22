@@ -449,7 +449,7 @@ body {
 .user-boards-item-actions {
   display: flex;
   align-items: center;
-  gap: 1px;
+  gap: 2px;
   padding-right: 0.4rem;
   opacity: 0;
   pointer-events: none;
@@ -461,9 +461,9 @@ body {
   background: transparent;
   border: none;
   color: var(--text-muted);
-  font-size: 0.75rem;
-  width: 20px;
-  height: 20px;
+  font-size: 1rem;
+  width: 26px;
+  height: 26px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -541,10 +541,6 @@ body {
   color: var(--accent-green);
 }
 
-.user-boards-action-btn.share:hover {
-  color: var(--accent-amber);
-  background: rgba(139, 105, 20, 0.08);
-}
 
 .user-boards-action-btn:disabled {
   opacity: 0.5;
@@ -662,6 +658,7 @@ body {
 .board-container {
   width: 100%;
   height: 100%;
+  position: relative;
 }
 
 .board-container canvas {
@@ -1088,4 +1085,624 @@ body {
 .color-swatch.active {
   border-color: var(--accent-green);
   box-shadow: 0 0 0 1px var(--accent-green);
+}
+
+/* ========================================
+   Wiring Mode - Pills & Dropdown
+   ======================================== */
+
+.pill-tag {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  margin: 0 2px;
+  border-radius: 10px;
+  font-size: 0.85em;
+  font-family: "Courier New", Courier, monospace;
+  cursor: pointer;
+  user-select: none;
+  vertical-align: baseline;
+  line-height: 1.4;
+}
+
+.pill-tag-in {
+  background: rgba(107, 142, 155, 0.25);
+  color: #4a6e7a;
+}
+
+.pill-tag-api-in {
+  background: rgba(74, 124, 89, 0.25);
+  color: #3a6b49;
+  border: 1px solid rgba(107, 142, 155, 0.4);
+}
+
+.pill-tag-out {
+  background: rgba(180, 130, 60, 0.25);
+  color: #8b6914;
+}
+
+.pill-tag-api-out {
+  background: rgba(74, 124, 89, 0.18);
+  color: #2d5a3a;
+  border: 1px solid rgba(180, 130, 60, 0.4);
+}
+
+.pill-tag-wired {
+  border-style: solid;
+  border-width: 2px;
+}
+
+.pill-editor-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+}
+
+.pill-editor {
+  flex: 1;
+  background: transparent;
+}
+
+.pill-editor:focus {
+  outline: none;
+}
+
+.pill-editor-toolbar {
+  position: absolute;
+  bottom: 4px;
+  right: 4px;
+  display: flex;
+  gap: 6px;
+}
+
+.text-edit-btn-run {
+  background: rgba(107, 142, 155, 0.2);
+  color: #4a6e7a;
+  border: 1px solid rgba(107, 142, 155, 0.4);
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.text-edit-btn-run:hover {
+  background: rgba(107, 142, 155, 0.35);
+}
+
+/* Smart Sticky Run Button (canvas overlay) */
+.smart-sticky-run-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(107, 142, 155, 0.6);
+  background: rgba(235, 231, 221, 0.95);
+  cursor: pointer;
+  z-index: 4;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  padding: 0;
+}
+.smart-sticky-run-btn:hover {
+  background: #6b8e9b;
+  border-color: #6b8e9b;
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(107, 142, 155, 0.4);
+}
+.smart-sticky-run-btn:hover .smart-sticky-run-icon {
+  color: #fff;
+}
+.smart-sticky-run-icon {
+  font-size: 13px;
+  color: #6b8e9b;
+  margin-left: 1px; /* optical center for play triangle */
+  line-height: 1;
+}
+.smart-sticky-run-btn--running {
+  border-color: #6b8e9b;
+  cursor: default;
+  animation: smart-sticky-pulse 1.2s ease-in-out infinite;
+}
+.smart-sticky-run-btn--running:hover {
+  background: rgba(235, 231, 221, 0.95);
+  border-color: #6b8e9b;
+  transform: none;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+}
+
+/* Spinner inside the run button */
+.smart-sticky-run-spinner {
+  display: block;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(107, 142, 155, 0.3);
+  border-top-color: #6b8e9b;
+  border-radius: 50%;
+  animation: smart-sticky-spin 0.7s linear infinite;
+}
+
+@keyframes smart-sticky-spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes smart-sticky-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(107, 142, 155, 0.4); }
+  50% { box-shadow: 0 0 0 6px rgba(107, 142, 155, 0); }
+}
+
+/* Chain progress label */
+.chain-progress-label {
+  font-size: 9px;
+  font-family: 'Courier New', Courier, monospace;
+  color: #6b8e9b;
+  white-space: nowrap;
+  z-index: 4;
+  pointer-events: none;
+  font-weight: bold;
+  letter-spacing: 0.5px;
+}
+
+/* Timer button (next to play) */
+.smart-sticky-timer-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(107, 142, 155, 0.6);
+  background: rgba(235, 231, 221, 0.95);
+  cursor: pointer;
+  z-index: 4;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  padding: 0;
+}
+.smart-sticky-timer-btn:hover {
+  background: #6b8e9b;
+  border-color: #6b8e9b;
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(107, 142, 155, 0.4);
+}
+.smart-sticky-timer-icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.smart-sticky-timer-btn:hover .smart-sticky-timer-icon {
+  filter: brightness(10);
+}
+
+/* Timer Popover */
+.timer-popover {
+  position: fixed;
+  background: var(--bg-card, #ebe7dd);
+  border: 1px solid var(--border-light, #c5bfb3);
+  border-radius: 6px;
+  padding: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 160px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  overflow: hidden;
+}
+.timer-popover-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #6b5d4d);
+  padding: 8px 10px 4px;
+}
+.timer-popover-list {
+  display: flex;
+  flex-direction: column;
+}
+.timer-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary, #2c2416);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+.timer-popover-item:hover:not(.disabled) {
+  background: rgba(74, 124, 89, 0.12);
+}
+.timer-popover-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.timer-popover-item-icon {
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.timer-popover-item-label {
+  flex: 1;
+}
+.timer-popover-footer {
+  font-size: 10px;
+  color: var(--text-muted, #6b5d4d);
+  text-align: center;
+  padding: 4px 10px 8px;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Model button (above timer) */
+.smart-sticky-model-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(107, 142, 155, 0.6);
+  background: rgba(235, 231, 221, 0.95);
+  cursor: pointer;
+  z-index: 4;
+  transition: all 0.15s ease;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.12);
+  padding: 0;
+}
+.smart-sticky-model-btn:hover {
+  background: #6b8e9b;
+  border-color: #6b8e9b;
+  transform: scale(1.15);
+  box-shadow: 0 2px 8px rgba(107, 142, 155, 0.4);
+}
+.smart-sticky-model-icon {
+  font-size: 14px;
+  color: #6b8e9b;
+  line-height: 1;
+}
+.smart-sticky-model-btn:hover .smart-sticky-model-icon {
+  color: #fff;
+}
+
+/* Model Popover */
+.model-popover {
+  position: fixed;
+  background: var(--bg-card, #ebe7dd);
+  border: 1px solid var(--border-light, #c5bfb3);
+  border-radius: 6px;
+  padding: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 180px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  overflow: hidden;
+}
+.model-popover-header {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #6b5d4d);
+  padding: 8px 10px 4px;
+}
+.model-popover-list {
+  display: flex;
+  flex-direction: column;
+}
+.model-popover-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary, #2c2416);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+.model-popover-item:hover:not(.disabled) {
+  background: rgba(74, 124, 89, 0.12);
+}
+.model-popover-item.disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.model-popover-item--selected {
+  opacity: 0.7 !important;
+  font-weight: bold;
+}
+.model-popover-item-label {
+  flex: 1;
+}
+.model-popover-item-provider {
+  font-size: 10px;
+  color: var(--text-muted, #6b5d4d);
+  opacity: 0.8;
+}
+.model-popover-item-check {
+  color: #4a7c59;
+  font-size: 13px;
+  font-weight: bold;
+}
+.model-popover-footer {
+  font-size: 10px;
+  color: var(--text-muted, #6b5d4d);
+  text-align: center;
+  padding: 4px 10px 8px;
+  font-style: italic;
+  opacity: 0.7;
+}
+
+/* Pill Dropdown */
+.pill-dropdown {
+  position: fixed;
+  background: var(--bg-card, #ebe7dd);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 10px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  z-index: 100;
+  min-width: 180px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+}
+
+.pill-dropdown-section {
+  margin-bottom: 8px;
+}
+
+.pill-dropdown-label {
+  display: block;
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-bottom: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.pill-dropdown-input {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  background: transparent;
+  color: var(--text-primary);
+}
+
+.pill-dropdown-row {
+  display: flex;
+  gap: 4px;
+}
+
+.pill-dropdown-dir-btn {
+  flex: 1;
+  padding: 3px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  background: transparent;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+.pill-dropdown-dir-btn.active {
+  background: var(--accent-green);
+  color: white;
+  border-color: var(--accent-green);
+}
+
+.pill-dropdown-remove {
+  width: 100%;
+  padding: 4px 8px;
+  border: 1px solid rgba(180, 60, 60, 0.3);
+  border-radius: 3px;
+  background: rgba(180, 60, 60, 0.1);
+  color: #8b3030;
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.pill-dropdown-remove:hover {
+  background: rgba(180, 60, 60, 0.2);
+}
+
+/* Pill dropdown — output mode selector */
+.pill-dropdown-mode-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pill-dropdown-mode-btn {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 6px;
+  border: 1px solid var(--border-light);
+  border-radius: 3px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  font-size: 11px;
+}
+.pill-dropdown-mode-btn:hover {
+  background: rgba(74, 124, 89, 0.1);
+}
+.pill-dropdown-mode-btn.active {
+  background: var(--accent-green);
+  color: #fff;
+  border-color: var(--accent-green);
+}
+.pill-dropdown-mode-label {
+  font-weight: bold;
+}
+.pill-dropdown-mode-desc {
+  font-size: 9px;
+  opacity: 0.6;
+}
+.pill-dropdown-mode-btn.active .pill-dropdown-mode-desc {
+  opacity: 0.85;
+}
+
+/* ========================================
+   API Lookup Dropdown
+   ======================================== */
+
+.api-lookup-dropdown {
+  position: fixed;
+  background: var(--bg-card, #ebe7dd);
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 100;
+  min-width: 240px;
+  max-width: 300px;
+  font-family: "Courier New", Courier, monospace;
+  font-size: 12px;
+  overflow: hidden;
+}
+
+.api-lookup-search {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-bottom: 1px solid var(--border-light);
+  background: var(--bg-parchment, #f4f0e8);
+  font-family: inherit;
+  font-size: 12px;
+  color: var(--text-primary, #2c2416);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.api-lookup-search::placeholder {
+  color: var(--text-muted, #6b5d4d);
+  opacity: 0.7;
+}
+
+.api-lookup-list {
+  max-height: 220px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-color) transparent;
+}
+
+.api-lookup-category {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted, #6b5d4d);
+  padding: 6px 10px 2px;
+}
+
+.api-lookup-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.api-lookup-item:hover,
+.api-lookup-item.highlighted {
+  background: rgba(74, 124, 89, 0.12);
+}
+
+.api-lookup-item-icon {
+  width: 18px;
+  text-align: center;
+  font-weight: 700;
+  color: var(--accent-green, #4a7c59);
+  flex-shrink: 0;
+  font-size: 14px;
+}
+
+.api-lookup-item-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.api-lookup-item-name {
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--text-primary, #2c2416);
+}
+
+.api-lookup-item-desc {
+  font-size: 10px;
+  color: var(--text-muted, #6b5d4d);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.api-lookup-empty {
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--text-muted, #6b5d4d);
+  font-size: 11px;
+}
+
+/* ========================================
+   API Pill Block (grouped card in editor)
+   ======================================== */
+
+.api-pill-block {
+  display: block;
+  border: 1px solid rgba(74, 124, 89, 0.4);
+  border-radius: 6px;
+  background: rgba(74, 124, 89, 0.08);
+  padding: 6px 8px;
+  margin: 4px 0;
+  font-family: "Courier New", Courier, monospace;
+  user-select: none;
+}
+
+.api-pill-block-header {
+  font-size: 0.85em;
+  color: #4a7c59;
+  font-weight: bold;
+  margin-bottom: 3px;
+  border-bottom: 1px solid rgba(74, 124, 89, 0.2);
+  padding-bottom: 3px;
+}
+
+.api-pill-block-inputs,
+.api-pill-block-outputs {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+
+.api-pill-block-label {
+  font-size: 0.75em;
+  color: #4a7c59;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-right: 2px;
+}
+.api-pill-block-hint {
+  font-size: 0.7em;
+  color: rgba(74, 124, 89, 0.55);
+  font-style: italic;
+  margin-left: 4px;
 }

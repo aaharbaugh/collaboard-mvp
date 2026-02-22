@@ -14,6 +14,20 @@ const CHAR_ASPECT = 0.6; // monospace width vs height
  * Single source of truth for wrapping. Wrap only at spaces — never breaks within a word.
  * Same wrapping model for edit and render when width/font are in the same units.
  */
+/**
+ * Tokenize a paragraph into words, whitespace, and brace-delimited tokens.
+ * `{...}` content is kept atomic so pill tokens are never split by wrapping.
+ */
+function tokenizeParagraph(para: string): string[] {
+  const tokens: string[] = [];
+  const regex = /(\{[^}]*\})|(\s+)|([^\s{]+)/g;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(para)) !== null) {
+    tokens.push(m[0]);
+  }
+  return tokens;
+}
+
 export function getWrappedLines(
   text: string,
   widthPx: number,
@@ -25,7 +39,7 @@ export function getWrappedLines(
   const lines: string[] = [];
   const paragraphs = (text ?? '').split('\n');
   for (const para of paragraphs) {
-    const words = para.split(/(\s+)/);
+    const words = tokenizeParagraph(para);
     let line = '';
     let lineLen = 0;
     for (const word of words) {
@@ -120,7 +134,7 @@ export function computeTextLayout(
   text: string,
   width: number,
   height: number,
-  options?: { minReadableFont?: number }
+  options?: { minReadableFont?: number; maxFontSize?: number }
 ): TextLayoutResult {
   const w = Math.max(0.5, Number.isFinite(width) ? width : 1);
   const h = Math.max(0.5, Number.isFinite(height) ? height : 1);
@@ -149,7 +163,8 @@ export function computeTextLayout(
   }
 
   // Find largest font such that wrapped lines fit in availW x availH (no clipping)
-  let fontSize = Math.min(availH / LINE_HEIGHT_RATIO, availW / CHAR_ASPECT);
+  const maxFont = options?.maxFontSize ?? Infinity;
+  let fontSize = Math.min(availH / LINE_HEIGHT_RATIO, availW / CHAR_ASPECT, maxFont);
   fontSize = Math.max(minFontFloor, fontSize);
   const maxIterations = 25;
   for (let i = 0; i < maxIterations; i++) {
@@ -158,7 +173,7 @@ export function computeTextLayout(
     const maxLineLen = Math.max(1, ...wrapped.map((l) => l.length));
     const capH = availH / (lineCount * LINE_HEIGHT_RATIO);
     const capW = availW / (maxLineLen * CHAR_ASPECT);
-    const nextFont = Math.max(minFontFloor, Math.min(fontSize, capH, capW));
+    const nextFont = Math.max(minFontFloor, Math.min(fontSize, capH, capW, maxFont));
     if (Math.abs(nextFont - fontSize) < 0.5) {
       fontSize = nextFont;
       return { fontSize, padding, wrappedLines: getWrappedLines(raw, availW, fontSize) };

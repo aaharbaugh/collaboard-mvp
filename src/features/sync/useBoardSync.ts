@@ -1,11 +1,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ref, onValue, set, update, remove } from 'firebase/database';
 import { database } from '../../lib/firebase';
-import type { BoardObject, Connection } from '../../types/board';
+import type { BoardObject, Connection, Wire } from '../../types/board';
 
 // ---------------------------------------------------------------------------
 // Field-level diff helpers — only trigger re-renders for objects that changed
 // ---------------------------------------------------------------------------
+
+/** Deep-compare two pill arrays by checking each pill's key fields. */
+function pillsChanged(a: BoardObject['pills'], b: BoardObject['pills']): boolean {
+  const al = a?.length ?? 0;
+  const bl = b?.length ?? 0;
+  if (al !== bl) return true;
+  if (al === 0) return false;
+  for (let i = 0; i < al; i++) {
+    const ap = a![i], bp = b![i];
+    if (ap.id !== bp.id || ap.label !== bp.label || ap.node !== bp.node || ap.direction !== bp.direction || ap.outputMode !== bp.outputMode || ap.maxChars !== bp.maxChars || ap.parseMode !== bp.parseMode || ap.apiGroup !== bp.apiGroup) return true;
+  }
+  return false;
+}
 
 function hasObjectChanged(prev: BoardObject, next: BoardObject): boolean {
   return (
@@ -21,7 +34,15 @@ function hasObjectChanged(prev: BoardObject, next: BoardObject): boolean {
     prev.selectedBy !== next.selectedBy ||
     prev.selectedByName !== next.selectedByName ||
     prev.headingLevel !== next.headingLevel ||
-    prev.type !== next.type
+    prev.type !== next.type ||
+    prev.promptTemplate !== next.promptTemplate ||
+    prev.promptOutput !== next.promptOutput ||
+    prev.lastRunStatus !== next.lastRunStatus ||
+    prev.lastRunAt !== next.lastRunAt ||
+    prev.lastRunError !== next.lastRunError ||
+    prev.enabled !== next.enabled ||
+    pillsChanged(prev.pills, next.pills) ||
+    prev.apiConfig?.apiId !== next.apiConfig?.apiId
   );
 }
 
@@ -40,14 +61,32 @@ function hasConnectionChanged(prev: Connection, next: Connection): boolean {
   return false;
 }
 
+function hasWireChanged(prev: Wire, next: Wire): boolean {
+  if (
+    prev.fromObjectId !== next.fromObjectId ||
+    prev.fromNode !== next.fromNode ||
+    prev.toObjectId !== next.toObjectId ||
+    prev.toNode !== next.toNode ||
+    prev.color !== next.color ||
+    prev.outputMode !== next.outputMode
+  ) return true;
+  const pp = prev.points, np = next.points;
+  if (pp === np) return false;
+  if (!pp || !np || pp.length !== np.length) return true;
+  for (let i = 0; i < pp.length; i++) if (pp[i] !== np[i]) return true;
+  return false;
+}
+
 export function useBoardSync(boardId: string | null) {
   const [objects, setObjects] = useState<Record<string, BoardObject>>({});
   const [connections, setConnections] = useState<Record<string, Connection>>({});
+  const [wires, setWires] = useState<Record<string, Wire>>({});
 
   useEffect(() => {
     if (!boardId) {
       setObjects({});
       setConnections({});
+      setWires({});
       return;
     }
 
@@ -95,9 +134,31 @@ export function useBoardSync(boardId: string | null) {
       });
     });
 
+    const wiresRef = ref(database, `boards/${boardId}/wires`);
+    const unsubWires = onValue(wiresRef, (snapshot) => {
+      const raw = (snapshot.val() || {}) as Record<string, Wire>;
+      setWires((prev) => {
+        let next = prev;
+        for (const id of Object.keys(prev)) {
+          if (!raw[id]) {
+            if (next === prev) next = { ...prev };
+            delete next[id];
+          }
+        }
+        for (const [id, newWire] of Object.entries(raw)) {
+          if (!prev[id] || hasWireChanged(prev[id], newWire)) {
+            if (next === prev) next = { ...prev };
+            next[id] = newWire;
+          }
+        }
+        return next;
+      });
+    });
+
     return () => {
       unsubObjects();
       unsubConnections();
+      unsubWires();
     };
   }, [boardId]);
 
@@ -124,6 +185,11 @@ export function useBoardSync(boardId: string | null) {
       if (obj.selectedByName != null) payload.selectedByName = obj.selectedByName;
       if (obj.sentToBack != null) payload.sentToBack = obj.sentToBack;
       if (obj.frameId != null) payload.frameId = obj.frameId;
+      if (obj.promptTemplate != null) payload.promptTemplate = obj.promptTemplate;
+      if (obj.pills != null && obj.pills.length > 0) payload.pills = obj.pills;
+      if (obj.promptOutput != null) payload.promptOutput = obj.promptOutput;
+      if (obj.enabled != null) payload.enabled = obj.enabled;
+      if (obj.apiConfig != null) payload.apiConfig = obj.apiConfig;
       set(
         ref(database, `boards/${boardId}/objects/${obj.id}`),
         payload
@@ -133,7 +199,7 @@ export function useBoardSync(boardId: string | null) {
   );
 
   /** Keys that can be explicitly cleared by passing undefined; we send null so Firebase removes them */
-  const CLEARABLE_OBJECT_KEYS = new Set<string>(['frameId', 'selectedBy', 'selectedByName']);
+  const CLEARABLE_OBJECT_KEYS = new Set<string>(['frameId', 'selectedBy', 'selectedByName', 'promptTemplate', 'pills', 'promptOutput', 'lastRunStatus', 'lastRunAt', 'lastRunError', 'apiConfig']);
 
   const updateObject = useCallback(
     (id: string, updates: Partial<BoardObject>) => {
@@ -228,9 +294,70 @@ export function useBoardSync(boardId: string | null) {
     [boardId, connections]
   );
 
+  const createWire = useCallback(
+    (wire: Wire) => {
+      if (!boardId) return;
+      set(
+        ref(database, `boards/${boardId}/wires/${wire.id}`),
+        wire
+      ).catch(console.error);
+    },
+    [boardId]
+  );
+
+  const deleteWire = useCallback(
+    (id: string) => {
+      if (!boardId) return;
+      remove(ref(database, `boards/${boardId}/wires/${id}`)).catch(
+        console.error
+      );
+    },
+    [boardId]
+  );
+
+  const updateWire = useCallback(
+    (id: string, updates: Partial<Wire>) => {
+      if (!boardId) return;
+      const payload: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(updates)) {
+        if (value !== undefined) payload[key] = value;
+      }
+      if (Object.keys(payload).length === 0) return;
+      // Optimistic local update
+      setWires((prev) => {
+        if (!prev[id]) return prev;
+        const next = { ...prev[id], ...updates } as Wire;
+        if (!hasWireChanged(prev[id], next)) return prev;
+        return { ...prev, [id]: next };
+      });
+      update(
+        ref(database, `boards/${boardId}/wires/${id}`),
+        payload
+      ).catch(console.error);
+    },
+    [boardId]
+  );
+
+  const deleteWiresForObject = useCallback(
+    (objectId: string) => {
+      if (!boardId) return;
+      const updates: Record<string, null> = {};
+      for (const [wireId, wire] of Object.entries(wires)) {
+        if (wire.fromObjectId === objectId || wire.toObjectId === objectId) {
+          updates[`boards/${boardId}/wires/${wireId}`] = null;
+        }
+      }
+      if (Object.keys(updates).length > 0) {
+        update(ref(database), updates).catch(console.error);
+      }
+    },
+    [boardId, wires]
+  );
+
   return {
     objects,
     connections,
+    wires,
     createObject,
     updateObject,
     deleteObject,
@@ -238,5 +365,9 @@ export function useBoardSync(boardId: string | null) {
     updateConnection,
     deleteConnection,
     deleteConnectionsForObject,
+    createWire,
+    updateWire,
+    deleteWire,
+    deleteWiresForObject,
   };
 }

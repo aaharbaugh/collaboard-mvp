@@ -51,9 +51,18 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const active = document.activeElement?.tagName;
-      if (active === 'INPUT' || active === 'TEXTAREA') return;
+      const el = document.activeElement;
+      const tag = el?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || (el as HTMLElement)?.isContentEditable) return;
       if (e.repeat) return;
+
+      // W key toggles wire mode
+      if (e.key === 'w' || e.key === 'W') {
+        e.preventDefault();
+        onHotkeyPress?.();
+        setToolMode(toolMode === 'wire' ? 'select' : 'wire');
+        return;
+      }
 
       let digit: string | null = null;
       if (e.key >= '1' && e.key <= '6') digit = e.key;
@@ -86,7 +95,7 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [setToolMode, cycleShapeTool, cyclePointerTool, onHotkeyPress, onAiToggle]);
+  }, [setToolMode, cycleShapeTool, cyclePointerTool, onHotkeyPress, onAiToggle, toolMode]);
 
   const isPointerActive = POINTER_CYCLE.includes(toolMode);
 
@@ -134,6 +143,12 @@ export function Toolbar({ onHotkeyPress, onAiToggle, isAiOpen = false }: Toolbar
           <span className="hotkey">[{hotkey}]</span> {label}
         </button>
       ))}
+      <button
+        className={`toolbar-btn ${toolMode === 'wire' ? 'active' : ''}`}
+        onClick={() => setToolMode(toolMode === 'wire' ? 'select' : 'wire')}
+      >
+        <span className="hotkey">[W]</span> Wire
+      </button>
       <button
         className={`toolbar-btn ${isAiOpen ? 'active' : ''}`}
         onClick={() => onAiToggle?.()}

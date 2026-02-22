@@ -3,11 +3,21 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const mockRunCommand = vi.fn();
+const mockClearHistory = vi.fn();
 const mockUseAgentCommand = vi.fn();
+const mockDeleteObject = vi.fn();
+const mockDeleteConnection = vi.fn();
 
 vi.mock('./useAgentCommand', () => ({
   useAgentCommand: mockUseAgentCommand,
   getStatusMessage: vi.fn(() => 'Working...'),
+}));
+
+vi.mock('../sync/useBoardSync', () => ({
+  useBoardSync: () => ({
+    deleteObject: mockDeleteObject,
+    deleteConnection: mockDeleteConnection,
+  }),
 }));
 
 const { AgentPanel } = await import('./AgentPanel');
@@ -17,6 +27,10 @@ function defaultHookState(overrides: Partial<{ loading: boolean; error: string |
     runCommand: mockRunCommand,
     loading: overrides.loading ?? false,
     error: overrides.error ?? null,
+    agentStatus: null,
+    history: [] as { role: string; text: string }[],
+    clearHistory: mockClearHistory,
+    lastUndoInfo: null,
   };
 }
 
@@ -53,13 +67,11 @@ describe('AgentPanel', () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
-  it('calls onClose when the backdrop is clicked', async () => {
+  it('calls onClose when clicking outside the popup', async () => {
     const onClose = vi.fn();
-    const user = userEvent.setup();
     render(<AgentPanel boardId="b1" isOpen={true} onClose={onClose} />);
-    // backdrop has aria-hidden so we query it another way
-    const backdrop = document.querySelector('.agent-backdrop') as HTMLElement;
-    await user.click(backdrop);
+    // Simulate a mousedown outside the popup to trigger the outside-click handler
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
     expect(onClose).toHaveBeenCalledOnce();
   });
 
