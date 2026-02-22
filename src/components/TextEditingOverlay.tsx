@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import type { BoardObject } from '../types/board';
 import { computeTextLayout } from '../lib/textParser';
-import { MIN_READABLE_FONT_SCREEN_PX, FLOOR_READABLE_FONT_SCREEN_PX } from '../lib/constants';
+import { MIN_READABLE_FONT_SCREEN_PX } from '../lib/constants';
 
 const DRAFT_PERSIST_DEBOUNCE_MS = 400;
 
@@ -170,12 +170,9 @@ export function TextEditingOverlay({
   }
 
   const minScreenDim = Math.min(screenW, screenH);
-  const layout = computeTextLayout(
-    text,
-    Math.max(1, screenW),
-    Math.max(1, screenH),
-    { minFontSize: MIN_READABLE_FONT_SCREEN_PX, floorFontSize: FLOOR_READABLE_FONT_SCREEN_PX },
-  );
+  const layout = computeTextLayout(text, Math.max(1, screenW), Math.max(1, screenH), {
+    minReadableFont: MIN_READABLE_FONT_SCREEN_PX,
+  });
   const screenFontSize = layout.fontSize;
   const screenPadding = layout.padding;
 

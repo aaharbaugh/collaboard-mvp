@@ -1,6 +1,6 @@
 import { Group, Rect, Text } from 'react-konva';
 import type { BoardObject } from '../../../../types/board';
-import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX, MIN_READABLE_FONT_SCREEN_PX, FLOOR_READABLE_FONT_SCREEN_PX } from '../../../../lib/constants';
+import { CURSOR_COLORS, DEFAULT_OBJECT_COLORS, MIN_RENDER_SCREEN_PX, MIN_READABLE_FONT_SCREEN_PX } from '../../../../lib/constants';
 import { computeTextLayout, LINE_HEIGHT_RATIO } from '../../../../lib/textParser';
 
 interface StickyNoteProps {
@@ -27,24 +27,11 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const screenW = w * scale;
   const screenH = h * scale;
 
-  const layout = computeTextLayout(
-    rawText,
-    Math.max(1, w),
-    Math.max(1, h),
-    {
-      minFontSize: MIN_READABLE_FONT_SCREEN_PX / scale,
-      floorFontSize: FLOOR_READABLE_FONT_SCREEN_PX / scale,
-    },
-  );
+  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), {
+    minReadableFont: MIN_READABLE_FONT_SCREEN_PX / scale,
+  });
   const { fontSize, padding, wrappedLines } = layout;
   const lineHeight = fontSize * LINE_HEIGHT_RATIO;
-  const availH = Math.max(1, h - padding * 2);
-  // Use small tolerance so we don't drop the last line to floating-point (layout already fits all)
-  const maxLinesThatFit =
-    lineHeight > 0
-      ? Math.min(wrappedLines.length, Math.max(1, Math.floor((availH + 0.5) / lineHeight)))
-      : wrappedLines.length;
-  const visibleLines = wrappedLines.slice(0, maxLinesThatFit);
 
   const bigEnoughToRender = screenW >= MIN_RENDER_SCREEN_PX && screenH >= MIN_RENDER_SCREEN_PX && fontSize >= 0.5;
   const hasContent = rawText.length > 0;
@@ -71,7 +58,7 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
       />
       {showText && (
         <>
-          {visibleLines.map((lineText, i) => (
+          {wrappedLines.map((lineText, i) => (
             <Text
               key={i}
               x={padding}
