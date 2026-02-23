@@ -33,7 +33,7 @@ describe('AuthGate', () => {
     } as ReturnType<typeof useAuth>);
 
     render(<AuthGate><span>Child</span></AuthGate>);
-    expect(screen.getByRole('heading', { name: 'CollabBoard' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'LIVEWIRE' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign in with google/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /sign in anonymously/i })).toBeInTheDocument();
     expect(screen.queryByText('Child')).not.toBeInTheDocument();
@@ -51,6 +51,6 @@ describe('AuthGate', () => {
     render(<AuthGate><span>Child content</span></AuthGate>);
     expect(screen.getByText('Child content')).toBeInTheDocument();
     expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: 'CollabBoard' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'LIVEWIRE' })).not.toBeInTheDocument();
   });
 });

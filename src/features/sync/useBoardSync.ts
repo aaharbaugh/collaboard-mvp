@@ -42,7 +42,11 @@ function hasObjectChanged(prev: BoardObject, next: BoardObject): boolean {
     prev.lastRunError !== next.lastRunError ||
     prev.enabled !== next.enabled ||
     pillsChanged(prev.pills, next.pills) ||
-    prev.apiConfig?.apiId !== next.apiConfig?.apiId
+    prev.apiConfig?.apiId !== next.apiConfig?.apiId ||
+    prev.accumulatorConfig?.mergeMode !== next.accumulatorConfig?.mergeMode ||
+    prev.accumulatorConfig?.runPromptAfterMerge !== next.accumulatorConfig?.runPromptAfterMerge ||
+    prev.versionCount !== next.versionCount ||
+    prev.imageData !== next.imageData
   );
 }
 
@@ -190,6 +194,7 @@ export function useBoardSync(boardId: string | null) {
       if (obj.promptOutput != null) payload.promptOutput = obj.promptOutput;
       if (obj.enabled != null) payload.enabled = obj.enabled;
       if (obj.apiConfig != null) payload.apiConfig = obj.apiConfig;
+      if (obj.accumulatorConfig != null) payload.accumulatorConfig = obj.accumulatorConfig;
       set(
         ref(database, `boards/${boardId}/objects/${obj.id}`),
         payload
@@ -199,7 +204,7 @@ export function useBoardSync(boardId: string | null) {
   );
 
   /** Keys that can be explicitly cleared by passing undefined; we send null so Firebase removes them */
-  const CLEARABLE_OBJECT_KEYS = new Set<string>(['frameId', 'selectedBy', 'selectedByName', 'promptTemplate', 'pills', 'promptOutput', 'lastRunStatus', 'lastRunAt', 'lastRunError', 'apiConfig']);
+  const CLEARABLE_OBJECT_KEYS = new Set<string>(['frameId', 'selectedBy', 'selectedByName', 'promptTemplate', 'pills', 'promptOutput', 'lastRunStatus', 'lastRunAt', 'lastRunError', 'apiConfig', 'accumulatorConfig', 'versionCount']);
 
   const updateObject = useCallback(
     (id: string, updates: Partial<BoardObject>) => {

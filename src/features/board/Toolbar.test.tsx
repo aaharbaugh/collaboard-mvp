@@ -65,4 +65,5 @@ describe('Toolbar', () => {
     await user.click(shapeBtn);
     expect(useBoardStore.getState().toolMode).toBe('circle');
   });
+
 });

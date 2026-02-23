@@ -27,7 +27,8 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const pills = obj.pills ?? [];
   const isPromptNode = pills.length > 0 || !!obj.promptTemplate;
   const isApiNode = !!obj.apiConfig;
-  const accentColor = isApiNode ? '#4a7c59' : '#6b8e9b';
+  const isAccumulator = !!obj.accumulatorConfig;
+  const accentColor = isAccumulator ? '#20b2aa' : isApiNode ? '#4a7c59' : '#6b8e9b';
   // Prompt nodes show their template text. Output always goes to a separate result sticky.
   // Non-prompt nodes show promptOutput if they received one via a wire.
   const displayText = isPromptNode ? (obj.text ?? '') : (obj.promptOutput ?? obj.text ?? '');
@@ -36,7 +37,7 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
   const h = Math.max(0, obj.height);
   const screenW = w * zoomScale;
 
-  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), { maxFontSize: 16 });
+  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), { maxFontSize: 20 });
   const { fontSize, padding, wrappedLines } = layout;
   const lineHeight = fontSize * LINE_HEIGHT_RATIO;
 
@@ -141,12 +142,13 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
               bgColor={color}
               stickyWidth={w}
               stickyHeight={h}
+              objectId={obj.id}
             />
           )}
         </>
       )}
       {/* Smart sticky: top accent bar */}
-      {isPromptNode && screenW >= MIN_RENDER_SCREEN_PX && (
+      {(isPromptNode || isAccumulator) && screenW >= MIN_RENDER_SCREEN_PX && (
         <Rect
           x={0}
           y={0}
@@ -158,7 +160,7 @@ export function StickyNote({ obj, isSelected, showSelectionBorder = true, remote
         />
       )}
       {/* Smart sticky: bottom accent bar */}
-      {isPromptNode && screenW >= MIN_RENDER_SCREEN_PX && (
+      {(isPromptNode || isAccumulator) && screenW >= MIN_RENDER_SCREEN_PX && (
         <Rect
           x={0}
           y={h - Math.max(3 / zoomScale, 3)}

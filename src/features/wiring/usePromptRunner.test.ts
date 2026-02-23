@@ -16,7 +16,7 @@ vi.mock('../../lib/firebase', () => {
 import { usePromptRunner } from './usePromptRunner';
 
 const mockFetch = vi.fn();
-global.fetch = mockFetch as unknown as typeof fetch;
+(globalThis as Record<string, unknown>).fetch = mockFetch as unknown as typeof fetch;
 
 function setCurrentUser(user: unknown) {
   (globalThis as Record<string, unknown>).__mockCurrentUser = user;

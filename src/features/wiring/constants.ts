@@ -26,19 +26,19 @@ export const ANCHOR_TO_NODE: Record<string, number> = {
   'top-left': 8,
 };
 
-/** 8 muted colors for wires, indexed by (fromNode - 1) */
+/** 8 colors for wires, indexed by (fromNode - 1) — red-based palette */
 export const WIRE_COLORS = [
-  '#6b8e9b', // teal-grey
-  '#9b7e6b', // warm brown
-  '#7b8e6b', // sage
-  '#8e6b8e', // muted purple
-  '#6b8e7b', // seafoam
-  '#8e7b6b', // tan
-  '#6b7b8e', // steel blue
-  '#8e8e6b', // olive
+  '#cc3333', // red
+  '#b82e2e', // dark red
+  '#d94444', // bright red
+  '#a52a2a', // brown-red
+  '#cc4040', // medium red
+  '#c03030', // crimson
+  '#d63838', // scarlet
+  '#b33535', // maroon-red
 ];
 
-export const WIRE_DEFAULT_COLOR = '#6b8e9b';
+export const WIRE_DEFAULT_COLOR = '#cc3333';
 
 /**
  * Compute local position (relative to object top-left) for a pill.
@@ -57,7 +57,7 @@ export function getPillLocalXY(
 
   const sameDirPills = pills
     .filter((p) => p.direction === pill.direction)
-    .sort((a, b) => a.node - b.node);
+    .sort((a, b) => pill.direction === 'in' ? b.node - a.node : a.node - b.node);
 
   const index = sameDirPills.findIndex((p) => p.node === targetNode);
   const total = sameDirPills.length;

@@ -20,6 +20,11 @@ export default defineConfig(({ mode }) => {
           changeOrigin: true,
           rewrite: () => `/${projectId}/us-central1/executePromptNode`,
         },
+        '/api/restore-version': {
+          target: `http://127.0.0.1:5001`,
+          changeOrigin: true,
+          rewrite: () => `/${projectId}/us-central1/restoreObjectVersion`,
+        },
       },
     },
   }

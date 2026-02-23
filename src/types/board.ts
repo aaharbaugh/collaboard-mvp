@@ -35,6 +35,13 @@ export interface BoardObject {
   lastRunError?: string;
   /** API lookup config — marks this sticky as an API node */
   apiConfig?: { apiId: string };
+  /** Accumulator/Merge node config — collects outputs from multiple upstream wires */
+  accumulatorConfig?: {
+    mergeMode: 'concatenate' | 'json_array' | 'numbered_list';
+    runPromptAfterMerge?: boolean;
+  };
+  /** Denormalized version count for quick UI display (historical versioning) */
+  versionCount?: number;
 }
 
 export interface PillRef {

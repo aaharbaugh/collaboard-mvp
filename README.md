@@ -1,6 +1,8 @@
-# Collaboard MVP
+# LiveWire
 
-A real-time collaborative whiteboard with an AI agent. Built with React, Konva, and Firebase.
+**Draft. Wire. Run.**
+
+A collaborative visual workspace where sticky notes become executable. Build data flows by wiring objects together on an infinite canvas — live API calls, text transforms, and AI generation run right where you design them.
 
 ---
 
@@ -15,7 +17,8 @@ A real-time collaborative whiteboard with an AI agent. Built with React, Konva, 
 | **Database** | Firebase Realtime Database |
 | **Hosting** | Firebase Hosting |
 | **Backend** | Firebase Cloud Functions v7 (Node 22, TypeScript) |
-| **AI (planning)** | OpenAI `gpt-4o` (or Groq `llama-3.3-70b-versatile` if `GROQ_API_KEY` is set) |
+| **AI (agent)** | OpenAI `gpt-4o` (or Groq `llama-3.3-70b-versatile` if `GROQ_API_KEY` is set) |
+| **AI (prompt engine)** | OpenAI `gpt-4o-mini` (or Groq `llama-3.3-70b-versatile` if `GROQ_API_KEY` is set) |
 | **Observability** | LangSmith (optional) |
 | **Testing** | Vitest (frontend), Jest + ts-jest (functions) |
 
@@ -24,9 +27,9 @@ A real-time collaborative whiteboard with an AI agent. Built with React, Konva, 
 ## Features
 
 ### Authentication
-- **AuthGate** wraps the app — users must sign in before accessing any board.
-- **Sign-in options:** Google OAuth or Anonymous (Firebase Auth).
-- Loading state shown until auth resolves; unauthenticated users see a sign-in card.
+- Animated sign-in screen with rain and lightning effects
+- **Sign-in options:** Google OAuth or Anonymous (Firebase Auth)
+- Quick-start shortcuts reference on the sign-in page
 
 ### Board Management
 - Users can own and switch between **multiple boards**.
@@ -43,12 +46,13 @@ Each board at `boards/${boardId}` has:
 
 **Object types:** `stickyNote`, `rectangle`, `circle`, `star`, `text`, `frame`, `image`
 
-Each object has: id, type, x, y, width, height, optional color/text/rotation/imageData/headingLevel/frameId/sentToBack, createdBy, createdAt, and optional selection fields (selectedBy, selectedByName).
+Each object has: id, type, x, y, width, height, optional color/text/rotation/imageData/headingLevel/frameId/sentToBack, createdBy, createdAt, and optional selection fields (selectedBy, selectedByName). Prompt nodes additionally have: `promptTemplate`, `pills` (input/output anchors), `promptOutput`, and optional `apiConfig`.
+
+**Wires:** fromObjectId, fromNode, toObjectId, toNode, optional outputMode (`update`/`append`/`create`). Wires connect pill anchors between objects to form data-processing pipelines.
 
 **Connections:** fromId, toId, fromAnchor, toAnchor, optional waypoints (flat `[x1,y1,x2,y2,...]`), color, createdBy, createdAt. Rendered as arrows with optional bent/polyline paths.
 
 ### Canvas & Tools
-- **React-Konva** canvas: pannable and zoomable (viewport: x, y, scale). Origin top-left; x right, y down.
 
 | Hotkey | Tool |
 |--------|------|
@@ -58,12 +62,41 @@ Each object has: id, type, x, y, width, height, optional color/text/rotation/ima
 | `4` | Text |
 | `5` | Frame |
 | `6` | Toggle AI panel |
+| `W` | Wire mode |
 
 - **Select mode:** Click to select; drag empty space for multi-select. Selected objects show resize/rotation handles, a ColorPicker, and order buttons (send to back / bring to front). Delete/Backspace removes selected objects or a selected connection. Ctrl+C / Ctrl+V copies and pastes.
 - **Drawing:** Click on the canvas to place an object in the current tool mode.
 - **Connector tool:** Click an anchor on one object, optionally click waypoints, then click an anchor on another object to create a connection.
-- **Text editing:** Double-click a sticky note or text element to edit inline.
+- **Text editing:** Double-click a sticky note or text element to edit inline. The editor shows hints for pill and API syntax.
 - **Frames:** Group objects into frames; children move and resize with the frame.
+
+### Wiring & Pills
+
+Pills are named data ports on any sticky note. Type `{name}` inside a sticky to create one. Pills can be inputs or outputs and are visualized as colored chips on the text.
+
+- Press `W` to enter wire mode — connect output pills to input pills across objects with bezier-curved wires
+- Wires support output modes: `update` (overwrite), `append`, or `create` (spawn new stickies)
+
+### API Lookup
+
+Type `>>` inside a sticky note editor to open the API lookup dropdown. APIs are organized into tabs:
+
+| Category | APIs |
+|-----------|------|
+| **Data** | Weather, Crypto, Currency Exchange, Timezone, IP Geolocation |
+| **Reference** | Dictionary, Wikipedia, Country Info |
+| **Transform** | Regex, JSON Path, Math, Case Conversion, List Operations, Split/Join, Template |
+| **AI** | DALL-E 3 Image Generation |
+
+Double-click an API heading on a sticky to swap it for a different API.
+
+### Execution Engine
+
+When you run a node, LiveWire:
+1. Traces upstream dependencies via wires
+2. Builds a directed acyclic graph of runnable nodes
+3. Executes nodes in topological order, parallelizing independent nodes at the same depth
+4. Routes results downstream through wires to target objects
 
 ### Real-time Collaboration
 - **useBoardSync:** Subscribes to `boards/${boardId}/objects` and `.../connections` via Firebase `onValue`. Field-level diffing limits re-renders to objects that actually changed.
@@ -91,27 +124,60 @@ collaboard-mvp/
 ├── src/
 │   ├── App.tsx                     # AuthGate → BoardView
 │   ├── features/
-│   │   ├── auth/                   # AuthGate, useAuth
+│   │   ├── auth/                   # AuthGate (animated sign-in), useAuth
 │   │   ├── board/                  # BoardView, BoardCanvas, Toolbar
 │   │   │   ├── components/         # BoardObject, ConnectionLine, UserBoardsPanel, ...
 │   │   │   │   └── objects/        # StickyNote, Rectangle, Circle, Star, Frame, Text, Image
 │   │   │   ├── hooks/              # useBoardId, useUserBoards
 │   │   │   └── utils/              # boardActions, boardCache, anchorPoint
 │   │   ├── agent/                  # AgentPanel, useAgentCommand
+│   │   ├── apiLookup/              # ApiLookupDropdown, apiRegistry (API definitions)
+│   │   ├── wiring/                 # Prompt engine UI — pills, wires, prompt runner
+│   │   │   ├── PillOverlays.tsx    # Render pill chips and API blocks on prompt nodes
+│   │   │   ├── PillEditor.tsx      # Configure pill properties (with syntax hints)
+│   │   │   ├── PillDropdown.tsx    # Pill selection dropdown
+│   │   │   ├── WireLine.tsx        # Render wire connections on canvas
+│   │   │   ├── WireModePopover.tsx # Output mode picker for wires
+│   │   │   ├── usePromptRunner.ts  # Hook to execute prompt nodes
+│   │   │   ├── wireUtils.ts        # Wire routing helpers
+│   │   │   ├── wireGraph.ts        # Dependency graph traversal (topological sort)
+│   │   │   └── constants.ts        # Wiring constants (anchor mappings, pill positions)
 │   │   └── sync/                   # useBoardSync, useCursorSync
 │   ├── lib/                        # firebase.ts, store.ts (Zustand), constants.ts
 │   ├── types/                      # board.ts (BoardObject, Connection, Cursor, Board)
 │   └── components/                 # CursorOverlay, PresenceList, TextEditingOverlay
 ├── functions/
 │   └── src/
-│       ├── index.ts                # Exports executeAgentCommand HTTP function
+│       ├── index.ts                # Exports executeAgentCommand + executePromptNode
 │       ├── agent.ts                # Agent loop, system prompt, tool definitions
 │       ├── agentTools.ts           # Tool implementations (Firebase reads/writes)
-│       └── templateEngine.ts       # Structured diagram templates (SWOT, flowchart, etc.)
+│       ├── templateEngine.ts       # Structured diagram templates (SWOT, flowchart, etc.)
+│       ├── promptRunner.ts         # Prompt engine — LLM execution, fan-out, output routing
+│       └── apiRegistry.ts          # External API executors (weather, crypto, time, etc.)
 ├── firebase.json                   # Hosting rewrites, emulators config
 ├── database.rules.json             # Realtime Database security rules
 └── vite.config.ts                  # Dev server + proxy for /api/agent
 ```
+
+---
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `1` | Pointer tool |
+| `2` | Sticky note |
+| `3` | Shapes (cycle Star → Circle → Rectangle) |
+| `4` | Text |
+| `5` | Frame |
+| `6` | AI mode |
+| `W` | Wire mode |
+| `>>` | API lookup (inside editor) |
+| `{name}` | Create pill (inside editor) |
+| `Ctrl+Z` | Undo |
+| `Ctrl+C` / `Ctrl+V` | Copy / Paste |
+| `Del` | Delete selected |
+| `Dbl-click` | Edit object |
 
 ---
 
@@ -226,30 +292,8 @@ npm run test:run    # run once
 | `src/features/agent/AgentPanel.test.tsx` | Dialog open/close, input, submit, loading state, example commands |
 | `src/features/agent/useAgentCommand.test.ts` | Hook — calls Firebase callable, handles errors |
 | `src/components/PresenceList.test.tsx` | Cursor/presence list rendering |
+| `src/features/wiring/usePromptRunner.test.ts` | Prompt runner hook — calls executePromptNode, handles loading/error state |
 | `src/lib/store.test.ts` | Zustand store — toolMode, selection, viewport |
-
-**Key mock patterns:**
-
-```ts
-// react-konva (canvas can't run in jsdom)
-vi.mock('react-konva', () => ({
-  Group: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  Rect: () => null,
-  Text: () => null,
-  // ...
-}));
-
-// Firebase (avoid real SDK init in tests)
-vi.mock('../../lib/firebase', () => ({
-  auth: { currentUser: null },
-  functions: {},
-}));
-
-// Dynamic import AFTER vi.mock() so the mock is in place first
-const { AgentPanel } = await import('./AgentPanel');
-```
-
----
 
 ### Functions — Jest + ts-jest
 
@@ -258,42 +302,18 @@ const { AgentPanel } = await import('./AgentPanel');
 npm test
 ```
 
-**Config (`functions/jest.config.js`):**
-- `preset: 'ts-jest'`, `testEnvironment: 'node'`
-- TypeScript is compiled with `module: 'CommonJS'` and `moduleResolution: 'node'` (overrides the NodeNext tsconfig so Jest can resolve modules)
-- `moduleNameMapper` strips `.js` extensions from NodeNext-style imports (e.g. `./agentTools.js` → `./agentTools`)
-
 **What's tested:**
 
 | File | What it covers |
 |------|---------------|
-| `functions/src/agentTools.test.ts` | All tool functions — createStickyNote, createShape, createFrame, createConnector, moveObject, resizeObject, updateText, changeColor, getBoardState, etc. Firebase writes are verified via mocked `admin.database` |
+| `functions/src/agentTools.test.ts` | All tool functions — createStickyNote, createShape, createFrame, createConnector, moveObject, resizeObject, updateText, changeColor, getBoardState |
 | `functions/src/agent.test.ts` | `runAgentCommand` — board validation, context loading, OpenAI tool-call loop, error handling |
-
-**Key mock patterns:**
-
-```ts
-// firebase-admin
-jest.mock('firebase-admin', () => ({
-  apps: [],
-  initializeApp: jest.fn(),
-  database: jest.fn(),
-}));
-(admin.database as unknown as jest.Mock).mockReturnValue(mockDb);
-
-// OpenAI — must include __esModule: true to fix "default is not a constructor"
-jest.mock('openai', () => ({
-  __esModule: true,
-  default: jest.fn().mockImplementation(() => mockOpenAIClient),
-}));
-
-// crypto — deterministic IDs in tests
-jest.spyOn(crypto, 'randomUUID').mockReturnValue('test-uuid-1234' as `${string}-${string}-${string}-${string}-${string}`);
-```
+| `functions/src/promptRunner.test.ts` | `runPromptNode` — parseSections, parseItemBlocks, findFreePosition, updateRunStatus, routeOutputToTarget, resolveTemplate, end-to-end LLM/API flows |
+| `functions/src/apiRegistry.test.ts` | External API executors — weather, crypto, exchange, time, dictionary, etc. |
 
 ---
 
-## Emulator ports (default)
+## Emulator Ports (default)
 
 | Service | Port |
 |---------|------|
@@ -302,3 +322,9 @@ jest.spyOn(crypto, 'randomUUID').mockReturnValue('test-uuid-1234' as `${string}-
 | Auth | 9099 |
 | Realtime Database | 9000 |
 | Emulator UI | 4000 |
+
+---
+
+## Created By
+
+[Aaron Harbaugh](https://www.linkedin.com/in/aaharbaugh/)

@@ -115,7 +115,7 @@ export const AnchorPoints = React.memo(function AnchorPoints({
         if (!anchor) continue;
         const isInput = pill.direction === 'in';
         const isApiPill = !!pill.apiGroup;
-        const pillColor = isApiPill ? '#4a7c59' : (isInput ? '#6b8e9b' : '#b4821e');
+        const pillColor = isInput ? '#4a7c59' : '#cc7722';
         const labelText = isApiPill ? `${pill.label}` : pill.label;
         const labelW = (labelText.length * 7 + 18) / zoomScale;
         const labelH = 20 / zoomScale;
@@ -236,17 +236,4 @@ export const AnchorPoints = React.memo(function AnchorPoints({
   );
 });
 
-function anchorDirection(node: number): { dx: number; dy: number } {
-  const s = 0.707;
-  switch (node) {
-    case 1: return { dx: 0, dy: -1 };
-    case 2: return { dx: s, dy: -s };
-    case 3: return { dx: 1, dy: 0 };
-    case 4: return { dx: s, dy: s };
-    case 5: return { dx: 0, dy: 1 };
-    case 6: return { dx: -s, dy: s };
-    case 7: return { dx: -1, dy: 0 };
-    case 8: return { dx: -s, dy: -s };
-    default: return { dx: 0, dy: -1 };
-  }
-}
+

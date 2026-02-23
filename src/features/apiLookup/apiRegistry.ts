@@ -6,7 +6,7 @@ export interface ApiParam {
 export interface ApiDefinition {
   id: string;
   name: string;
-  category: 'Data' | 'Reference';
+  category: 'Data' | 'Reference' | 'Transform' | 'AI';
   description: string;
   icon: string;
   params: ApiParam[];
@@ -83,6 +83,99 @@ export const API_REGISTRY: ApiDefinition[] = [
     description: 'Population, area, currency, languages',
     icon: '#',
     params: [{ name: 'country', placeholder: 'e.g. Japan' }],
+  },
+
+  // -- Transform --
+  {
+    id: 'transform_regex',
+    name: 'Regex Extract',
+    category: 'Transform',
+    description: 'Extract matches using a regular expression',
+    icon: '/',
+    params: [
+      { name: 'text', placeholder: 'input text' },
+      { name: 'pattern', placeholder: 'e.g. \\d+' },
+      { name: 'flags', placeholder: 'e.g. g, gi (default: g)' },
+      { name: 'group', placeholder: 'capture group (default: 0)' },
+    ],
+  },
+  {
+    id: 'transform_json_path',
+    name: 'JSON Path',
+    category: 'Transform',
+    description: 'Extract value from JSON using dot-notation path',
+    icon: '{',
+    params: [
+      { name: 'text', placeholder: 'JSON text' },
+      { name: 'path', placeholder: 'e.g. data.items[0].name' },
+    ],
+  },
+  {
+    id: 'transform_math',
+    name: 'Math',
+    category: 'Transform',
+    description: 'Evaluate a math expression',
+    icon: '=',
+    params: [{ name: 'expression', placeholder: 'e.g. (42 * 3) + sqrt(16)' }],
+  },
+  {
+    id: 'transform_case',
+    name: 'Case Convert',
+    category: 'Transform',
+    description: 'Convert text case (upper/lower/title/snake/kebab)',
+    icon: 'Aa',
+    params: [
+      { name: 'text', placeholder: 'input text' },
+      { name: 'operation', placeholder: 'upper, lower, title, snake, kebab' },
+    ],
+  },
+  {
+    id: 'transform_list',
+    name: 'List Operations',
+    category: 'Transform',
+    description: 'Sort, reverse, dedupe, count, or shuffle lines',
+    icon: '#',
+    params: [
+      { name: 'text', placeholder: 'one item per line' },
+      { name: 'operation', placeholder: 'sort, reverse, unique, count, shuffle' },
+    ],
+  },
+  {
+    id: 'transform_split_join',
+    name: 'Split / Join',
+    category: 'Transform',
+    description: 'Split text by delimiter or join lines',
+    icon: '|',
+    params: [
+      { name: 'text', placeholder: 'input text' },
+      { name: 'operation', placeholder: 'split or join' },
+      { name: 'delimiter', placeholder: 'e.g. , (default: comma)' },
+    ],
+  },
+  {
+    id: 'transform_template',
+    name: 'Template',
+    category: 'Transform',
+    description: 'Fill a template with input lines as {0}, {1}, ...',
+    icon: 'T',
+    params: [
+      { name: 'text', placeholder: 'input lines' },
+      { name: 'template', placeholder: 'e.g. Hello {0}, welcome to {1}!' },
+    ],
+  },
+
+  // -- AI --
+  {
+    id: 'image_generate',
+    name: 'Image Generate',
+    category: 'AI',
+    description: 'Generate an image with DALL-E 3',
+    icon: 'I',
+    params: [
+      { name: 'prompt', placeholder: 'describe the image' },
+      { name: 'size', placeholder: '1024x1024 (default)' },
+      { name: 'style', placeholder: 'vivid or natural' },
+    ],
   },
 ];
 

@@ -429,10 +429,10 @@ describe('createConnector', () => {
     );
   });
 
-  it('defaults to blue (PALETTE.blue) color', async () => {
+  it('defaults to black color', async () => {
     await createConnector('b1', 'f1', 't1', {}, 'u1');
     expect(mockSet).toHaveBeenCalledWith(
-      expect.objectContaining({ color: PALETTE.blue })
+      expect.objectContaining({ color: '#000000' })
     );
   });
 
@@ -781,9 +781,9 @@ describe('changeColor', () => {
     expect(mockUpdate).toHaveBeenCalledWith({ color: PALETTE.yellow });
   });
 
-  it('defaults non-palette hex to warm yellow', async () => {
+  it('passes through arbitrary hex colors', async () => {
     await changeColor('b1', 'obj1', '#ABCDEF');
-    expect(mockUpdate).toHaveBeenCalledWith({ color: PALETTE.yellow });
+    expect(mockUpdate).toHaveBeenCalledWith({ color: '#ABCDEF' });
   });
 });
 

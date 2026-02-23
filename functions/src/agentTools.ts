@@ -193,13 +193,17 @@ const COLOR_MAP: Record<string, string> = {
   grey: '#e0e0d0',
   gray: '#e0e0d0',
   lightgrey: '#e0e0d0',
+  black: '#000000',
+  white: '#ffffff',
+  red: '#e85050',
+  brown: '#5a5044',
 };
 
 export function mapColorNameToHex(color: string): string {
   const key = color.toLowerCase().replace(/\s+/g, '');
   if (COLOR_MAP[key]) return COLOR_MAP[key];
-  // If already a valid palette hex, pass through
-  if (BOARD_PALETTE_HEX.includes(color as (typeof BOARD_PALETTE_HEX)[number])) return color;
+  // If already a hex color, pass through
+  if (/^#[0-9a-fA-F]{3,8}$/.test(color)) return color;
   return COLOR_MAP.yellow ?? BOARD_PALETTE_HEX[0];
 }
 
@@ -292,7 +296,7 @@ function _buildConnectionData(
     toId,
     fromAnchor,
     toAnchor,
-    color: options.color ? mapColorNameToHex(options.color) : PALETTE.blue,
+    color: options.color ? mapColorNameToHex(options.color) : '#000000',
     createdBy: userId,
     createdAt: Date.now(),
   };
@@ -1193,7 +1197,7 @@ export async function connectBatch(
       toId: conn.toId,
       fromAnchor,
       toAnchor,
-      color: options.color ? mapColorNameToHex(options.color) : PALETTE.blue,
+      color: options.color ? mapColorNameToHex(options.color) : '#000000',
       createdBy: userId,
       createdAt: Date.now(),
     };

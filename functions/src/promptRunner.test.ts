@@ -65,6 +65,21 @@ jest.mock('./apiRegistry.js', () => ({
 }));
 
 // ---------------------------------------------------------------------------
+// apiCache mock
+// ---------------------------------------------------------------------------
+jest.mock('./apiCache.js', () => ({
+  getCachedResult: jest.fn().mockResolvedValue(null),
+  setCachedResult: jest.fn().mockResolvedValue(undefined),
+}));
+
+// ---------------------------------------------------------------------------
+// versionHelper mock
+// ---------------------------------------------------------------------------
+jest.mock('./versionHelper.js', () => ({
+  pushVersion: jest.fn().mockResolvedValue(undefined),
+}));
+
+// ---------------------------------------------------------------------------
 // Import function under test AFTER mocks are defined
 // ---------------------------------------------------------------------------
 /* eslint-disable @typescript-eslint/no-explicit-any */

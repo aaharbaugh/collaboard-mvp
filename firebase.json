@@ -35,6 +35,11 @@
         "region": "us-central1"
       },
       {
+        "source": "/api/restore-version",
+        "function": "restoreObjectVersion",
+        "region": "us-central1"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }

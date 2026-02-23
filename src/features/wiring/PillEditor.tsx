@@ -174,7 +174,7 @@ function buildApiBlockDOM(
 export function PillEditor({
   initialText,
   initialPills,
-  objectId,
+  objectId: _objectId,
   onSave,
   onCancel,
   style,
@@ -184,7 +184,7 @@ export function PillEditor({
   const [pills, setPills] = useState<PillRef[]>(initialPills);
   const [dropdownPill, setDropdownPill] = useState<{ pill: PillRef; position: { x: number; y: number } } | null>(null);
   const [apiLookup, setApiLookup] = useState<{ position: { x: number; y: number } } | null>(null);
-  const [hasApiConfig, setHasApiConfig] = useState(false);
+  const [, setHasApiConfig] = useState(false);
   /** Stores info needed to remove the '>>' text and insert pills after API selection */
   const apiTriggerRef = useRef<{ firstGtCharIdx: number } | null>(null);
   const editorRef = useRef<HTMLDivElement>(null);
@@ -600,11 +600,13 @@ export function PillEditor({
         onClick={handlePillClick}
         style={style}
       />
+      <div className="pill-editor-hint">{'{name}'} pill &middot; &gt;&gt; api</div>
       <div className="pill-editor-toolbar">
         <button className="text-edit-btn text-edit-btn-done" onClick={handleDone}>
           Done
         </button>
       </div>
+      {/* Accumulator config is managed via board object properties, not PillEditor */}
 
       {dropdownPill && (
         <PillDropdown

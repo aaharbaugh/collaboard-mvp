@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { subscribeWithSelector } from 'zustand/middleware';
+import type { AnchorPosition } from '../types/board';
 
 export interface UndoEntry {
   description: string;
@@ -27,6 +28,13 @@ export interface DrawingWire {
   waypoints: { x: number; y: number }[];
 }
 
+export interface DrawingConnection {
+  fromObjectId: string;
+  fromAnchor: AnchorPosition;
+  currentPoint: { x: number; y: number };
+  waypoints: { x: number; y: number }[];
+}
+
 interface BoardStore {
   viewport: Viewport;
   setViewport: (vp: Partial<Viewport>) => void;
@@ -49,13 +57,22 @@ interface BoardStore {
   drawingWire: DrawingWire | null;
   setDrawingWire: (wire: DrawingWire | null) => void;
 
+  drawingConnection: DrawingConnection | null;
+  setDrawingConnection: (conn: DrawingConnection | null) => void;
+
   runningPromptId: string | null;
   setRunningPromptId: (id: string | null) => void;
 
   chainRunningIds: Set<string>;
   chainCurrentId: string | null;
+  chainCurrentIds: Set<string>;
   setChainRunning: (ids: string[], currentId: string | null) => void;
+  setChainRunningParallel: (ids: string[], currentIds: string[]) => void;
   clearChainRunning: () => void;
+
+  /** Request to change API on an object (triggered by double-clicking API label in PillOverlays) */
+  apiChangeRequest: { objectId: string; position: { x: number; y: number } } | null;
+  setApiChangeRequest: (req: { objectId: string; position: { x: number; y: number } } | null) => void;
 }
 
 export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) => ({
@@ -99,11 +116,19 @@ export const useBoardStore = create<BoardStore>()(subscribeWithSelector((set) =>
   drawingWire: null,
   setDrawingWire: (wire) => set({ drawingWire: wire }),
 
+  drawingConnection: null,
+  setDrawingConnection: (conn) => set({ drawingConnection: conn }),
+
   runningPromptId: null,
   setRunningPromptId: (id) => set({ runningPromptId: id }),
 
   chainRunningIds: new Set<string>(),
   chainCurrentId: null,
-  setChainRunning: (ids, currentId) => set({ chainRunningIds: new Set(ids), chainCurrentId: currentId }),
-  clearChainRunning: () => set({ chainRunningIds: new Set<string>(), chainCurrentId: null }),
+  chainCurrentIds: new Set<string>(),
+  setChainRunning: (ids, currentId) => set({ chainRunningIds: new Set(ids), chainCurrentId: currentId, chainCurrentIds: new Set(currentId ? [currentId] : []) }),
+  setChainRunningParallel: (ids, currentIds) => set({ chainRunningIds: new Set(ids), chainCurrentId: currentIds[0] ?? null, chainCurrentIds: new Set(currentIds) }),
+  clearChainRunning: () => set({ chainRunningIds: new Set<string>(), chainCurrentId: null, chainCurrentIds: new Set<string>() }),
+
+  apiChangeRequest: null,
+  setApiChangeRequest: (req) => set({ apiChangeRequest: req }),
 })));

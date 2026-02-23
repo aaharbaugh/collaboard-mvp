@@ -1,3 +1,6 @@
+import OpenAI from 'openai';
+import { TRANSFORM_EXECUTORS } from './transformExecutors.js';
+
 export interface ApiExecutor {
   /** Simple single-URL APIs: build URL from params, then formatResponse parses the JSON. */
   buildUrl?: (params: Record<string, string>) => string;
@@ -132,7 +135,7 @@ export const API_EXECUTORS: Record<string, ApiExecutor> = {
       const q = data.quotes?.USD;
       if (!q) return `No price data for ${data.name}`;
       const price = q.price != null ? formatCryptoPrice(q.price) : '?';
-      return `${data.name} (${data.symbol}): $${price}, 24h: ${q.percent_change_24h?.toFixed(2) ?? '?'}%, vol: $${q.volume_24h ? (q.volume_24h / 1e6).toFixed(1) + 'M' : '?'}, mcap: $${q.market_cap ? (q.market_cap / 1e9).toFixed(1) + 'B' : '?'}`;
+      return `${data.name} (${data.symbol}): $${price}, 24h: ${q.percent_change_24h?.toFixed(2) ?? '?'}%, vol: $${q.volume_24h ? formatLargeNumber(q.volume_24h) : '?'}, mcap: $${q.market_cap ? formatLargeNumber(q.market_cap) : '?'}`;
     },
   },
 
@@ -228,6 +231,28 @@ export const API_EXECUTORS: Record<string, ApiExecutor> = {
       return `${data.ip}: ${data.city}, ${data.region} ${data.country_name} (${data.latitude}, ${data.longitude}), ISP: ${data.org ?? '?'}, timezone: ${data.timezone ?? '?'}`;
     },
   },
+
+  image_generate: {
+    execute: async (p) => {
+      const prompt = (p.prompt || '').trim();
+      if (!prompt) return 'No prompt provided for image generation.';
+      const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+      const response = await openai.images.generate({
+        model: 'dall-e-3',
+        prompt,
+        n: 1,
+        size: (p.size as '1024x1024' | '1024x1792' | '1792x1024') || '1024x1024',
+        style: (p.style as 'vivid' | 'natural') || 'vivid',
+        response_format: 'b64_json',
+      });
+      const b64 = response.data?.[0]?.b64_json;
+      if (!b64) return 'Image generation returned no data.';
+      return `data:image/png;base64,${b64}`;
+    },
+  },
+
+  // Spread transform executors
+  ...TRANSFORM_EXECUTORS,
 };
 
 // ---------------------------------------------------------------------------
@@ -264,6 +289,15 @@ export const WMO_CODES: Record<number, string> = {
   82: 'Violent rain showers', 85: 'Slight snow showers', 86: 'Heavy snow showers',
   95: 'Thunderstorm', 96: 'Thunderstorm w/ slight hail', 99: 'Thunderstorm w/ heavy hail',
 };
+
+/** Format large numbers with appropriate suffix (K, M, B, T) */
+export function formatLargeNumber(n: number): string {
+  if (n >= 1e12) return (n / 1e12).toFixed(1) + 'T';
+  if (n >= 1e9) return (n / 1e9).toFixed(1) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return n.toFixed(0);
+}
 
 /** Format crypto price with appropriate decimal places for the magnitude */
 export function formatCryptoPrice(price: number): string {

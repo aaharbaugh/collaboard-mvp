@@ -6,6 +6,7 @@ import { useCursorSync } from '../sync/useCursorSync';
 import { useBoardViewport } from './useBoardViewport';
 import { useBoardStore } from '../../lib/store';
 import { WireLine } from '../wiring/WireLine';
+import { ConnectionLine } from './components/ConnectionLine';
 import { TimerPopover } from '../wiring/TimerPopover';
 import { ModelPopover } from '../wiring/ModelPopover';
 import { NODE_TO_ANCHOR, ANCHOR_TO_NODE } from '../wiring/constants';
@@ -17,8 +18,9 @@ import {
   SHAPE_DEFAULTS,
   FRAME_DEFAULTS,
   DEFAULT_OBJECT_COLORS,
+  CONNECTION_DEFAULT_COLOR,
 } from '../../lib/constants';
-import type { BoardObject as BoardObjectType, AnchorPosition, Wire } from '../../types/board';
+import type { BoardObject as BoardObjectType, AnchorPosition, Wire, Connection } from '../../types/board';
 import { getAnchorWorldPoint, getPillWorldPoint } from './utils/anchorPoint';
 
 interface BoardCanvasProps {
@@ -32,6 +34,11 @@ interface BoardCanvasProps {
   updateObject: (id: string, updates: Partial<BoardObjectType>) => void;
   createObject: (obj: BoardObjectType) => void;
   deleteObject: (id: string) => void;
+  connections: Record<string, Connection>;
+  createConnection: (conn: Connection) => void;
+  updateConnection: (id: string, updates: Partial<Connection>) => void;
+  deleteConnection: (id: string) => void;
+  deleteConnectionsForObject: (objectId: string) => void;
   wires: Record<string, Wire>;
   createWire: (wire: Wire) => void;
   updateWire: (id: string, updates: Partial<Wire>) => void;
@@ -49,6 +56,11 @@ export function BoardCanvas({
   updateObject,
   createObject,
   deleteObject,
+  connections,
+  createConnection,
+  updateConnection,
+  deleteConnection,
+  deleteConnectionsForObject,
   wires,
   createWire,
   updateWire,
@@ -64,8 +76,11 @@ export function BoardCanvas({
   const pushUndo    = useBoardStore((s) => s.pushUndo);
   const drawingWire = useBoardStore((s) => s.drawingWire);
   const setDrawingWire = useBoardStore((s) => s.setDrawingWire);
+  const drawingConnection = useBoardStore((s) => s.drawingConnection);
+  const setDrawingConnection = useBoardStore((s) => s.setDrawingConnection);
   const chainRunningIds = useBoardStore((s) => s.chainRunningIds);
   const chainCurrentId = useBoardStore((s) => s.chainCurrentId);
+  const chainCurrentIds = useBoardStore((s) => s.chainCurrentIds);
 
   // Must be declared before useBoardViewport so the ref is in scope when passed
   const stageRef = useRef<Konva.Stage>(null);
@@ -104,7 +119,9 @@ export function BoardCanvas({
   const backObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack === true), [allObjects]);
   const frontObjects = useMemo(() => allObjects.filter((obj) => obj.sentToBack !== true), [allObjects]);
   const wireList = useMemo(() => Object.values(wires), [wires]);
+  const connectionList = useMemo(() => Object.values(connections), [connections]);
   const [selectedWireId, setSelectedWireId] = useState<string | null>(null);
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [timerPopover, setTimerPopover] = useState<{ x: number; y: number } | null>(null);
   const [modelPopover, setModelPopover] = useState<{ x: number; y: number } | null>(null);
 
@@ -175,6 +192,7 @@ export function BoardCanvas({
    * ALL objects on every rotation RAF tick was wasteful.
    */
   const drawingFromId = drawingWire?.fromObjectId ?? null;
+  const drawingConnFromId = drawingConnection?.fromObjectId ?? null;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   const liveObjects = useMemo(() => {
     // Collect only the IDs we actually need live data for
@@ -183,7 +201,12 @@ export function BoardCanvas({
       endpointIds.add(w.fromObjectId);
       endpointIds.add(w.toObjectId);
     }
+    for (const c of connectionList) {
+      endpointIds.add(c.fromId);
+      endpointIds.add(c.toId);
+    }
     if (drawingFromId) endpointIds.add(drawingFromId);
+    if (drawingConnFromId) endpointIds.add(drawingConnFromId);
 
     const result: Record<string, BoardObjectType> = {};
     for (const id of endpointIds) {
@@ -203,7 +226,7 @@ export function BoardCanvas({
     }
     return result;
   // objectNodeRefs.current is a mutable ref read intentionally for live Konva node state
-  }, [objects, wireList, drawingFromId, transformVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [objects, wireList, connectionList, drawingFromId, drawingConnFromId, transformVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const clearSelection = useCallback(() => {
     const ids = useBoardStore.getState().selectedIds;
@@ -212,6 +235,7 @@ export function BoardCanvas({
     });
     setSelection([]);
     setSelectedWireId(null);
+    setSelectedConnectionId(null);
     if (transformRAFRef.current != null) {
       cancelAnimationFrame(transformRAFRef.current);
       transformRAFRef.current = null;
@@ -248,6 +272,18 @@ export function BoardCanvas({
         setDrawingWire({
           ...drawingWire,
           waypoints: [...(drawingWire.waypoints ?? []), pos],
+          currentPoint: pos,
+        });
+        return;
+      }
+
+      // Connection drawing: clicking on empty canvas adds a waypoint
+      if (drawingConnection && e.target === e.target.getStage()) {
+        const pos = getPointerPosition(e);
+        if (!pos) return;
+        setDrawingConnection({
+          ...drawingConnection,
+          waypoints: [...(drawingConnection.waypoints ?? []), pos],
           currentPoint: pos,
         });
         return;
@@ -341,13 +377,13 @@ export function BoardCanvas({
         useBoardStore.getState().setToolMode('select');
       }
     },
-    [toolMode, createObject, deleteObject, pushUndo, userId, userName, getPointerPosition, setSelection, clearSelection, updateObject, viewport.scale, didPan, drawingWire, setDrawingWire]
+    [toolMode, createObject, deleteObject, pushUndo, userId, userName, getPointerPosition, setSelection, clearSelection, updateObject, viewport.scale, didPan, drawingWire, setDrawingWire, drawingConnection, setDrawingConnection]
   );
 
   const handleObjectClick = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>, id: string) => {
       e.cancelBubble = true;
-      if (drawingWire) return;
+      if (drawingWire || drawingConnection) return;
       if (toolMode === 'move') return;
       if (didPan.current) return;
       const prevIds = useBoardStore.getState().selectedIds;
@@ -567,11 +603,21 @@ export function BoardCanvas({
         const fromMoved = movedIds.has(wire.fromObjectId);
         const toMoved = movedIds.has(wire.toObjectId);
         if (!fromMoved && !toMoved) continue;
-        // Snapshot original points for undo
         wirePointSnapshots.set(wireId, [...wire.points]);
-        // Shift all waypoints by the drag delta
         const newPoints = wire.points.map((v, i) => v + (i % 2 === 0 ? dx : dy));
         updateWire(wireId, { points: newPoints });
+      }
+
+      // Shift connection waypoints for all connections connected to moved objects
+      const connPointSnapshots = new Map<string, number[] | undefined>();
+      for (const [connId, conn] of Object.entries(connections)) {
+        if (!conn.points || conn.points.length < 2) continue;
+        const fromMoved = movedIds.has(conn.fromId);
+        const toMoved = movedIds.has(conn.toId);
+        if (!fromMoved && !toMoved) continue;
+        connPointSnapshots.set(connId, [...conn.points]);
+        const newPoints = conn.points.map((v, i) => v + (i % 2 === 0 ? dx : dy));
+        updateConnection(connId, { points: newPoints });
       }
 
       // Push undo entry: restore all objects to their pre-drag positions and frame membership.
@@ -590,9 +636,11 @@ export function BoardCanvas({
               frameId: obj.frameId,
             });
           });
-          // Restore wire waypoints
           wirePointSnapshots.forEach((origPoints, wireId) => {
             updateWire(wireId, { points: origPoints });
+          });
+          connPointSnapshots.forEach((origPoints, connId) => {
+            updateConnection(connId, { points: origPoints });
           });
         },
       });
@@ -605,7 +653,7 @@ export function BoardCanvas({
       }
       setFrameDragPositions(null);
     },
-    [updateObject, updateWire, pushUndo, objects, wires, allObjects]
+    [updateObject, updateWire, updateConnection, pushUndo, objects, wires, connections, allObjects]
   );
 
   const handleResizeStart = useCallback(
@@ -738,12 +786,15 @@ export function BoardCanvas({
         if (drawingWire) {
           setDrawingWire({ ...drawingWire, currentPoint: pos });
         }
+        if (drawingConnection) {
+          setDrawingConnection({ ...drawingConnection, currentPoint: pos });
+        }
         if (selectionRect) {
           setSelectionRect((prev) => prev ? { ...prev, endX: pos.x, endY: pos.y } : null);
         }
       }
     },
-    [getPointerPosition, updateCursor, drawingWire, setDrawingWire, selectionRect]
+    [getPointerPosition, updateCursor, drawingWire, setDrawingWire, drawingConnection, setDrawingConnection, selectionRect]
   );
 
   // Attach Konva Transformer to selected node(s) for rotation (defer so refs are set after paint)
@@ -860,12 +911,45 @@ export function BoardCanvas({
         }
         return;
       }
+
+      // Anchor click in any non-wire mode: start/complete a connection arrow
+      {
+        const obj = objects[objectId];
+        if (!obj) return;
+        const dc = useBoardStore.getState().drawingConnection;
+        if (dc) {
+          // Cancel if same object
+          if (dc.fromObjectId === objectId) {
+            setDrawingConnection(null);
+            return;
+          }
+          const newConn: Connection = {
+            id: crypto.randomUUID(),
+            fromId: dc.fromObjectId,
+            fromAnchor: dc.fromAnchor,
+            toId: objectId,
+            toAnchor: anchor,
+            ...(dc.waypoints.length > 0
+              ? { points: dc.waypoints.flatMap((p) => [p.x, p.y]) }
+              : {}),
+            createdBy: userId,
+            createdAt: Date.now(),
+          };
+          createConnection(newConn);
+          pushUndo({ description: 'Create connection', undo: () => deleteConnection(newConn.id) });
+          setDrawingConnection(null);
+        } else {
+          // Start drawing connection
+          const point = getAnchorWorldPoint(obj, anchor);
+          setDrawingConnection({ fromObjectId: objectId, fromAnchor: anchor, currentPoint: point, waypoints: [] });
+        }
+      }
     },
-    [objects, userId, toolMode, createWire, deleteWire, pushUndo, setDrawingWire]
+    [objects, userId, toolMode, createWire, deleteWire, createConnection, deleteConnection, pushUndo, setDrawingWire, setDrawingConnection]
   );
 
   const handleStageMouseUpWithAreaSelect = useCallback(
-    (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+    (_e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
       handleStageMouseUp();
 
       // Finalize area selection
@@ -916,6 +1000,10 @@ export function BoardCanvas({
           setDrawingWire(null);
           return;
         }
+        if (drawingConnection) {
+          setDrawingConnection(null);
+          return;
+        }
       }
 
       // Ctrl+Z / Cmd+Z: undo last action
@@ -941,12 +1029,26 @@ export function BoardCanvas({
           return;
         }
 
+        // Delete selected connection
+        if (selectedConnectionId) {
+          const c = connections[selectedConnectionId];
+          deleteConnection(selectedConnectionId);
+          setSelectedConnectionId(null);
+          if (c) {
+            pushUndo({ description: 'Delete connection', undo: () => createConnection(c) });
+          }
+          return;
+        }
+
         // Capture before-state for objects being deleted
         const deletedObjects = selectedIds
           .map((id) => objects[id])
           .filter((o): o is NonNullable<typeof o> => o != null);
         const deletedWires = Object.values(wires).filter(
           (w) => selectedIds.includes(w.fromObjectId) || selectedIds.includes(w.toObjectId)
+        );
+        const deletedConnections = Object.values(connections).filter(
+          (c) => selectedIds.includes(c.fromId) || selectedIds.includes(c.toId)
         );
         // Track frame→child assignments that will be unlinked
         const frameUnlinks: Array<{ id: string; frameId: string }> = [];
@@ -966,16 +1068,18 @@ export function BoardCanvas({
             });
           }
           deleteWiresForObject(id);
+          deleteConnectionsForObject(id);
           deleteObject(id);
         });
         setSelection([]);
 
-        if (deletedObjects.length > 0 || deletedWires.length > 0) {
+        if (deletedObjects.length > 0 || deletedWires.length > 0 || deletedConnections.length > 0) {
           pushUndo({
             description: 'Delete objects',
             undo: () => {
               deletedObjects.forEach((obj) => createObject(obj));
               deletedWires.forEach((w) => createWire(w));
+              deletedConnections.forEach((c) => createConnection(c));
               frameUnlinks.forEach(({ id, frameId }) => updateObject(id, { frameId }));
             },
           });
@@ -1032,19 +1136,20 @@ export function BoardCanvas({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedIds, deleteObject, deleteWiresForObject, setSelection, drawingWire, setDrawingWire, selectedWireId, deleteWire, createWire, objects, wires, allObjects, createObject, updateObject, userId, userName, pushUndo]);
+  }, [selectedIds, deleteObject, deleteWiresForObject, deleteConnectionsForObject, setSelection, drawingWire, setDrawingWire, drawingConnection, setDrawingConnection, selectedWireId, selectedConnectionId, deleteWire, createWire, deleteConnection, createConnection, objects, wires, connections, allObjects, createObject, updateObject, userId, userName, pushUndo]);
 
   // Cancel drawing on right-click
   useEffect(() => {
     const handleContextMenu = (e: MouseEvent) => {
-      if (drawingWire) {
+      if (drawingWire || drawingConnection) {
         e.preventDefault();
         setDrawingWire(null);
+        setDrawingConnection(null);
       }
     };
     window.addEventListener('contextmenu', handleContextMenu);
     return () => window.removeEventListener('contextmenu', handleContextMenu);
-  }, [drawingWire, setDrawingWire]);
+  }, [drawingWire, setDrawingWire, drawingConnection, setDrawingConnection]);
 
   // Paste image from clipboard
   useEffect(() => {
@@ -1177,7 +1282,7 @@ export function BoardCanvas({
         onClick={handleStageClick}
         onTap={handleStageClick}
         style={{
-          cursor: drawingWire ? 'crosshair' : toolMode === 'move' ? 'grab' : toolMode === 'select' ? 'default' : toolMode === 'wire' ? 'crosshair' : 'crosshair',
+          cursor: (drawingWire || drawingConnection) ? 'crosshair' : toolMode === 'move' ? 'grab' : toolMode === 'select' ? 'default' : toolMode === 'wire' ? 'crosshair' : 'crosshair',
           willChange: 'transform', // GPU layer for smooth zoom/pan
         }}
       >
@@ -1187,7 +1292,7 @@ export function BoardCanvas({
             const isSelected = selectedSet.has(obj.id);
             const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
             const cs = chainRunningIds.has(obj.id)
-              ? (chainCurrentId === obj.id ? 'running' as const : 'queued' as const)
+              ? (chainCurrentIds.has(obj.id) ? 'running' as const : 'queued' as const)
               : null;
             return (
               <MemoizedObjectGroup
@@ -1198,12 +1303,52 @@ export function BoardCanvas({
                 showSelectionBorder={isSelected && !isMultiSelect}
                 dragPos={frameDragPositions?.get(obj.id)}
                 toolMode={toolMode}
-                hasDrawingConnection={!!drawingWire}
+                hasDrawingConnection={!!drawingWire || !!drawingConnection}
                 zoomScale={viewport.scale}
                 userId={userId}
                 isMultiSelect={isMultiSelect}
                 chainStatus={cs}
                 handlers={sh}
+              />
+            );
+          })}
+
+          {/* Connection arrows (straight polylines) */}
+          {connectionList.map((c) => {
+            const fromObj = liveObjects[c.fromId] ?? objects[c.fromId];
+            const toObj = liveObjects[c.toId] ?? objects[c.toId];
+            if (!fromObj || !toObj) return null;
+            return (
+              <ConnectionLine
+                key={c.id}
+                connection={c}
+                fromObj={fromObj}
+                toObj={toObj}
+                zoomScale={viewport.scale}
+                isSelected={selectedConnectionId === c.id}
+                onSelect={(connId) => {
+                  clearSelection();
+                  setSelectedWireId(null);
+                  setSelectedConnectionId(connId);
+                }}
+                onWaypointDrag={(connId, wpIndex, x, y) => {
+                  const conn = connections[connId];
+                  if (!conn?.points) return;
+                  const newPoints = [...conn.points];
+                  newPoints[wpIndex] = x;
+                  newPoints[wpIndex + 1] = y;
+                  updateConnection(connId, { points: newPoints });
+                }}
+                onWaypointDragEnd={(connId, points) => {
+                  updateConnection(connId, { points });
+                }}
+                onDoubleClick={(connId, x, y) => {
+                  const conn = connections[connId];
+                  if (!conn) return;
+                  const existingPoints = conn.points ?? [];
+                  const newPoints = [...existingPoints, x, y];
+                  updateConnection(connId, { points: newPoints });
+                }}
               />
             );
           })}
@@ -1286,7 +1431,7 @@ export function BoardCanvas({
             const dx = to.x - from.x;
             const dy = to.y - from.y;
             const dist = Math.sqrt(dx * dx + dy * dy);
-            const offset = Math.max(40 / viewport.scale, dist * 0.3);
+            const offset = Math.max(Math.min(40 / viewport.scale, dist * 0.5), dist * 0.3);
             const fromPill = fromObj.pills?.find((p) => p.node === drawingWire.fromNode);
             const dirs: Record<number, { dx: number; dy: number }> = {
               1: { dx: 0, dy: -1 }, 2: { dx: 0.707, dy: -0.707 }, 3: { dx: 1, dy: 0 }, 4: { dx: 0.707, dy: 0.707 },
@@ -1313,12 +1458,63 @@ export function BoardCanvas({
             );
           })()}
 
+          {/* In-progress connection preview */}
+          {drawingConnection && (() => {
+            const fromObj = liveObjects[drawingConnection.fromObjectId] ?? objects[drawingConnection.fromObjectId];
+            if (!fromObj) return null;
+            const from = getAnchorWorldPoint(fromObj, drawingConnection.fromAnchor);
+            const to = drawingConnection.currentPoint;
+            const wps = drawingConnection.waypoints ?? [];
+            const previewColor = CONNECTION_DEFAULT_COLOR;
+            const lineW = 2 / viewport.scale;
+            const dashOn = 6 / viewport.scale;
+            const dashOff = 3 / viewport.scale;
+
+            const allPts = [from, ...wps, to];
+            return (
+              <Shape
+                sceneFunc={(context) => {
+                  context.beginPath();
+                  context.moveTo(allPts[0].x, allPts[0].y);
+                  for (let i = 1; i < allPts.length; i++) {
+                    context.lineTo(allPts[i].x, allPts[i].y);
+                  }
+                  context.strokeStyle = previewColor;
+                  context.lineWidth = lineW;
+                  context.setLineDash([dashOn, dashOff]);
+                  context.stroke();
+
+                  // Arrowhead preview at cursor
+                  const last = allPts[allPts.length - 2];
+                  const adx = to.x - last.x;
+                  const ady = to.y - last.y;
+                  const alen = Math.sqrt(adx * adx + ady * ady) || 1;
+                  const angle = Math.atan2(ady / alen, adx / alen);
+                  const arrowSize = 10 / viewport.scale;
+                  context.setLineDash([]);
+                  context.beginPath();
+                  context.save();
+                  context.translate(to.x, to.y);
+                  context.rotate(angle);
+                  context.moveTo(0, 0);
+                  context.lineTo(-arrowSize, -arrowSize * 0.4);
+                  context.lineTo(-arrowSize, arrowSize * 0.4);
+                  context.closePath();
+                  context.fillStyle = previewColor;
+                  context.fill();
+                  context.restore();
+                }}
+                listening={false}
+              />
+            );
+          })()}
+
           {/* Objects in front (above arrows) */}
           {frontObjects.map((obj) => {
             const isSelected = selectedSet.has(obj.id);
             const showAnchors = (hoveredObjectId === obj.id || isSelected) && !isMultiSelect;
             const cs = chainRunningIds.has(obj.id)
-              ? (chainCurrentId === obj.id ? 'running' as const : 'queued' as const)
+              ? (chainCurrentIds.has(obj.id) ? 'running' as const : 'queued' as const)
               : null;
             return (
               <MemoizedObjectGroup
@@ -1329,7 +1525,7 @@ export function BoardCanvas({
                 showSelectionBorder={isSelected && !isMultiSelect}
                 dragPos={frameDragPositions?.get(obj.id)}
                 toolMode={toolMode}
-                hasDrawingConnection={!!drawingWire}
+                hasDrawingConnection={!!drawingWire || !!drawingConnection}
                 zoomScale={viewport.scale}
                 userId={userId}
                 isMultiSelect={isMultiSelect}

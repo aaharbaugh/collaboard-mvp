@@ -18,9 +18,11 @@ import {
   clearPersistedEditState,
 } from '../../lib/editStatePersistence';
 import { usePromptRunner } from '../wiring/usePromptRunner';
-import { getExecutionChain } from '../wiring/wireGraph';
+import { getExecutionChain, getExecutionLevels } from '../wiring/wireGraph';
 import type { PillRef } from '../../types/board';
 import type { PromptDataSnapshot } from '../wiring/PillEditor';
+import { ApiLookupDropdown } from '../apiLookup/ApiLookupDropdown';
+import type { ApiDefinition } from '../apiLookup/apiRegistry';
 
 export function BoardView() {
   const { user, signOut } = useAuth();
@@ -38,10 +40,15 @@ export function BoardView() {
 
   const {
     objects,
+    connections,
     wires,
     updateObject,
     createObject,
     deleteObject,
+    createConnection,
+    updateConnection,
+    deleteConnection,
+    deleteConnectionsForObject,
     createWire,
     updateWire,
     deleteWire,
@@ -58,6 +65,8 @@ export function BoardView() {
   const selectedIds = useBoardStore((s) => s.selectedIds);
   const setSelection = useBoardStore((s) => s.setSelection);
   const pushUndo    = useBoardStore((s) => s.pushUndo);
+  const apiChangeRequest = useBoardStore((s) => s.apiChangeRequest);
+  const setApiChangeRequest = useBoardStore((s) => s.setApiChangeRequest);
 
   const selectedObject = selectedIds.length === 1 ? objects[selectedIds[0]] : null;
 
@@ -230,7 +239,82 @@ export function BoardView() {
     setRestoredDraft(null);
   }, [objects, updateObject, pushUndo, boardId]);
 
+  // Left-side nodes for inputs, right-side nodes for outputs (same as PillEditor)
+  const INPUT_NODES  = [8, 7, 6, 1, 5];
+  const OUTPUT_NODES = [2, 3, 4, 1, 5];
+  const nextFreeNode = (pills: PillRef[], direction: 'in' | 'out'): number => {
+    const used = new Set(pills.map((p) => p.node));
+    const preferred = direction === 'in' ? INPUT_NODES : OUTPUT_NODES;
+    for (const n of preferred) {
+      if (!used.has(n)) return n;
+    }
+    return preferred[preferred.length - 1];
+  };
+
+  /** Handle API change from the double-click dropdown */
+  const handleApiChange = useCallback((newApi: ApiDefinition) => {
+    if (!apiChangeRequest) return;
+    const { objectId } = apiChangeRequest;
+    const obj = objects[objectId];
+    if (!obj) { setApiChangeRequest(null); return; }
+
+    const oldApiId = obj.apiConfig?.apiId;
+    const prevPills = obj.pills ?? [];
+    const prevText = obj.text ?? '';
+    const prevTemplate = obj.promptTemplate;
+    const prevApiConfig = obj.apiConfig;
+
+    // Remove old API pills, keep non-API pills
+    const keptPills = prevPills.filter((p) => p.apiGroup !== oldApiId);
+
+    // Create new input pills
+    const newPills: PillRef[] = [...keptPills];
+    const inputPills: PillRef[] = [];
+    for (const param of newApi.params) {
+      const node = nextFreeNode(newPills, 'in');
+      const pill: PillRef = { id: crypto.randomUUID(), label: param.name, node, direction: 'in', apiGroup: newApi.id };
+      newPills.push(pill);
+      inputPills.push(pill);
+    }
+    // Create new output pill
+    const outNode = nextFreeNode(newPills, 'out');
+    const outPill: PillRef = { id: crypto.randomUUID(), label: 'result', node: outNode, direction: 'out', apiGroup: newApi.id };
+    newPills.push(outPill);
+
+    // Update text and template: replace [API:oldId] marker with [API:newId]
+    const newMarker = `[API:${newApi.id}]`;
+    let newText = prevText;
+    let newTemplate = prevTemplate;
+    if (oldApiId) {
+      const oldMarker = `[API:${oldApiId}]`;
+      newText = newText.replace(oldMarker, newMarker);
+      newTemplate = newTemplate?.replace(oldMarker, newMarker);
+    } else {
+      // No old marker — append the new one
+      newText = newMarker;
+      newTemplate = newMarker;
+    }
+
+    updateObject(objectId, {
+      text: newText,
+      promptTemplate: newTemplate,
+      pills: newPills,
+      apiConfig: { apiId: newApi.id },
+    });
+    pushUndo({
+      description: 'Change API',
+      undo: () => updateObject(objectId, {
+        text: prevText,
+        promptTemplate: prevTemplate,
+        pills: prevPills,
+        apiConfig: prevApiConfig,
+      }),
+    });
+    setApiChangeRequest(null);
+  }, [apiChangeRequest, objects, updateObject, pushUndo, setApiChangeRequest]);
+
   const setChainRunning = useBoardStore((s) => s.setChainRunning);
+  const setChainRunningParallel = useBoardStore((s) => s.setChainRunningParallel);
   const clearChainRunning = useBoardStore((s) => s.clearChainRunning);
 
   const handleRunNow = useCallback(async (objectId: string) => {
@@ -266,21 +350,24 @@ export function BoardView() {
       return;
     }
 
-    // Chain execution: run sequentially from roots to target.
-    // Each runPrompt() awaits the HTTP response, and the backend awaits all
-    // Firebase writes before responding — so data is in Firebase when we proceed.
-    setChainRunning(chain, chain[0]);
-    for (const stepId of chain) {
-      console.log('[chain] running step:', stepId, objects[stepId]?.text?.slice(0, 25) ?? objects[stepId]?.apiConfig?.apiId);
-      setChainRunning(chain, stepId);
-      const result = await runPrompt(stepId);
-      console.log('[chain] step done:', stepId, 'success:', result.success);
-      if (!result.success) break;
+    // Parallel chain execution: run independent nodes concurrently within each depth level.
+    const levels = getExecutionLevels(objectId, objects, wires);
+    const allIds = levels.flat();
+    setChainRunningParallel(allIds, levels[0] ?? []);
+    let aborted = false;
+    for (const level of levels) {
+      if (aborted) break;
+      console.log('[chain] running level:', level.map((id) => objects[id]?.text?.slice(0, 25) ?? objects[id]?.apiConfig?.apiId));
+      setChainRunningParallel(allIds, level);
+      const results = await Promise.all(level.map((id) => runPrompt(id)));
+      for (const result of results) {
+        if (!result.success) { aborted = true; break; }
+      }
       // Brief pause to let Firebase listeners propagate the write to other clients
       await new Promise((r) => setTimeout(r, 500));
     }
     clearChainRunning();
-  }, [objects, wires, updateObject, runPrompt, setChainRunning, clearChainRunning]);
+  }, [objects, wires, updateObject, runPrompt, setChainRunning, setChainRunningParallel, clearChainRunning]);
 
   const handleDraftChange = (text: string) => {
     latestDraftRef.current = text;
@@ -379,7 +466,7 @@ export function BoardView() {
     <div className="board-layout">
       <header className="board-header">
         <div className="board-header-left">
-          <h1 className="board-title">CollabBoard</h1>
+          <h1 className="board-title">LiveWire</h1>
           <span className="board-object-count" title="Objects on board">
             {Object.keys(objects).length} object{Object.keys(objects).length === 1 ? '' : 's'}
           </span>
@@ -412,6 +499,11 @@ export function BoardView() {
             updateObject={updateObject}
             createObject={createObject}
             deleteObject={deleteObject}
+            connections={connections}
+            createConnection={createConnection}
+            updateConnection={updateConnection}
+            deleteConnection={deleteConnection}
+            deleteConnectionsForObject={deleteConnectionsForObject}
             wires={wires}
             createWire={createWire}
             updateWire={updateWire}
@@ -432,8 +524,17 @@ export function BoardView() {
               onSavePromptData={handleSavePromptData}
               latestPromptDataRef={latestPromptDataRef}
               onSetApiConfig={(id, apiId) => updateObject(id, { apiConfig: { apiId } })}
+              boardId={boardId}
+              userId={user.uid}
             />
           </div>
+          {apiChangeRequest && (
+            <ApiLookupDropdown
+              position={apiChangeRequest.position}
+              onSelect={handleApiChange}
+              onClose={() => setApiChangeRequest(null)}
+            />
+          )}
           <CursorOverlay
             cursors={cursors}
             viewport={viewport}

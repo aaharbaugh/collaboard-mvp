@@ -2,6 +2,8 @@ import * as admin from 'firebase-admin';
 import OpenAI from 'openai';
 import { Client, RunTree } from 'langsmith';
 import { API_EXECUTORS } from './apiRegistry.js';
+import { getCachedResult, setCachedResult } from './apiCache.js';
+import { pushVersion } from './versionHelper.js';
 
 // Initialize Admin SDK once per cold start
 if (!admin.apps.length) {
@@ -81,6 +83,12 @@ interface BoardObject {
   promptOutput?: string;
   createdBy?: string;
   apiConfig?: { apiId: string };
+  accumulatorConfig?: {
+    mergeMode: 'concatenate' | 'json_array' | 'numbered_list';
+    runPromptAfterMerge?: boolean;
+  };
+  versionCount?: number;
+  imageData?: string;
 }
 
 const STICKY_COLORS = ['#e6d070', '#a8c888', '#98b8d8', '#d8b898', '#c8a8d8', '#d8a8a8'];
@@ -230,6 +238,17 @@ export async function routeOutputToTarget(
     fanOutSource?: string;
   },
 ): Promise<{ stickyCreated: boolean; newObject?: BoardObject }> {
+  // Version snapshot before modifying target (for update/append modes)
+  if (mode === 'update' || mode === 'append') {
+    try {
+      const targetSnap = await db.ref(`boards/${boardId}/objects/${targetId}`).get();
+      if (targetSnap.exists()) {
+        const target = targetSnap.val() as BoardObject;
+        await pushVersion(db, boardId, targetId, target.text ?? null, target.promptOutput ?? null, 'wire_update', opts.userId);
+      }
+    } catch { /* versioning is best-effort */ }
+  }
+
   if (mode === 'update') {
     await db.ref(`boards/${boardId}/objects/${targetId}`).update({ promptOutput: content });
     return { stickyCreated: false };
@@ -386,51 +405,271 @@ export async function runPromptNode(req: RunPromptRequest): Promise<{ success: b
       }
     }
 
-    // 4b. API node short-circuit — fetch external API instead of LLM
+    // 4b. Accumulator node — collect upstream inputs and merge
+    if (obj.accumulatorConfig) {
+      const accConfig = obj.accumulatorConfig;
+
+      // Ephemeral state for collecting inputs across multiple upstream triggers
+      const accStateRef = db.ref(`boards/${boardId}/objects/${objectId}/accumulatorState`);
+
+      // Collect all available input values
+      const collectedInputs: Record<string, string> = {};
+      for (const [pillId, value] of inputValues) {
+        if (value) collectedInputs[pillId] = value;
+      }
+
+      // Merge inputs based on merge mode
+      const inputTexts = Object.values(collectedInputs).filter(Boolean);
+      let merged: string;
+      switch (accConfig.mergeMode) {
+        case 'json_array':
+          merged = JSON.stringify(inputTexts);
+          break;
+        case 'numbered_list':
+          merged = inputTexts.map((t, i) => `${i + 1}. ${t}`).join('\n');
+          break;
+        case 'concatenate':
+        default:
+          merged = inputTexts.join('\n\n');
+          break;
+      }
+
+      // Version snapshot before overwriting (best-effort)
+      try { await pushVersion(db, boardId, objectId, obj.text ?? null, obj.promptOutput ?? null, 'wire_update', req.userId); } catch { /* versioning is best-effort */ }
+
+      // Store merged result
+      await db.ref(`boards/${boardId}/objects/${objectId}`).update({ promptOutput: merged });
+
+      // Clean up accumulator state
+      await accStateRef.remove();
+
+      // If runPromptAfterMerge is enabled and there's a template, continue to LLM path
+      if (!accConfig.runPromptAfterMerge || !template) {
+        // Route output through outgoing wires
+        const outgoingWires = Object.values(wires).filter(
+          (w) => w.fromObjectId === objectId && !usedIncomingWireIds.has(w.id),
+        );
+        const now = Date.now();
+        const runStamp = now.toString(36);
+        for (const wire of outgoingWires) {
+          await routeOutputToTarget(db, boardId, wire.toObjectId, merged, 'update', {
+            sourceObjectId: objectId, runStamp, wireIdSlug: wire.id.slice(0, 4),
+            userId: req.userId, now, stickyIndex: 0,
+          });
+        }
+        await updateRunStatus(db, boardId, objectId, 'success');
+        return { success: true, output: merged };
+      }
+      // else: fall through to LLM path with merged content as input
+      inputValues.set(inPills[0]?.id ?? '__merged__', merged);
+    }
+
+    // 4c. API node short-circuit — fetch external API instead of LLM
     if (obj.apiConfig?.apiId) {
-      const executor = API_EXECUTORS[obj.apiConfig.apiId];
+      const apiId = obj.apiConfig.apiId;
+      const executor = API_EXECUTORS[apiId];
       if (!executor) {
-        throw new Error(`Unknown API: ${obj.apiConfig.apiId}`);
+        throw new Error(`Unknown API: ${apiId}`);
       }
 
       // Build params from API-group input pill values only (pill label → value)
-      const apiInPills = inPills.filter((p) => p.apiGroup === obj.apiConfig!.apiId);
-      const params: Record<string, string> = {};
+      const apiInPills = inPills.filter((p) => p.apiGroup === apiId);
+      const baseParams: Record<string, string> = {};
       for (const pill of apiInPills) {
-        params[pill.label] = inputValues.get(pill.id) ?? '';
+        baseParams[pill.label] = inputValues.get(pill.id) ?? '';
       }
 
-      console.log(`[promptRunner] API node: ${obj.apiConfig.apiId}, params:`, params);
-
-      // Execute the API — either via custom execute() or simple buildUrl+formatResponse
-      let formattedResult: string;
-      if (executor.execute) {
-        formattedResult = await executor.execute(params);
-      } else {
-        const url = executor.buildUrl!(params);
-        const apiResponse = await fetch(url);
-        if (!apiResponse.ok) {
-          throw new Error(`API ${obj.apiConfig.apiId} returned HTTP ${apiResponse.status}`);
+      // --- Fan-out detection for API nodes ---
+      // If any API-group input pill has parseMode: 'list' and its value contains
+      // multiple lines, run the API once per line (fan-out).
+      let fanOutPill: PillRef | null = null;
+      let fanOutLines: string[] = [];
+      for (const pill of apiInPills) {
+        if (pill.parseMode !== 'list') continue;
+        if (!singleSourcePills.has(pill.id)) continue;
+        const value = inputValues.get(pill.id) ?? '';
+        const lines = value.split('\n').map((l) => l.trim()).filter((l) => l.length > 0);
+        if (lines.length > 1) {
+          fanOutPill = pill;
+          fanOutLines = lines;
+          break; // fan-out on first qualifying pill
         }
-        const apiData = await apiResponse.json();
-        formattedResult = executor.formatResponse!(apiData);
       }
+
+      const isFanOut = fanOutPill !== null && fanOutLines.length > 1;
+
+      /** Execute a single API call with given params, using cache. */
+      const executeApi = async (params: Record<string, string>): Promise<string> => {
+        let result = await getCachedResult(db, boardId, apiId, params);
+        if (result) {
+          console.log(`[promptRunner] Cache hit for ${apiId}`);
+          return result;
+        }
+        if (executor.execute) {
+          result = await executor.execute(params);
+        } else {
+          const url = executor.buildUrl!(params);
+          const apiResponse = await fetch(url);
+          if (!apiResponse.ok) {
+            throw new Error(`API ${apiId} returned HTTP ${apiResponse.status}`);
+          }
+          const apiData = await apiResponse.json();
+          result = executor.formatResponse!(apiData);
+        }
+        await setCachedResult(db, boardId, apiId, params, result);
+        return result;
+      };
+
+      // Version snapshot before overwriting promptOutput (best-effort)
+      try { await pushVersion(db, boardId, objectId, obj.text ?? null, obj.promptOutput ?? null, 'api_run', req.userId); } catch { /* versioning is best-effort */ }
+
+      const now = Date.now();
+      const runStamp = now.toString(36);
+      let stickiesCreated = 0;
+
+      if (isFanOut) {
+        // --- Fan-out: one API call per line ---
+        console.log(`[promptRunner] API fan-out: ${apiId}, ${fanOutLines.length} lines on pill "${fanOutPill!.label}"`);
+
+        const results: { label: string; result: string }[] = [];
+        for (const line of fanOutLines) {
+          const params = { ...baseParams, [fanOutPill!.label]: line };
+          console.log(`[promptRunner] API fan-out call: ${apiId}, ${fanOutPill!.label}="${line}"`);
+          const result = await executeApi(params);
+          results.push({ label: line, result });
+        }
+
+        // Store combined result on the API node itself (skip for images — too large for text display)
+        const fanOutIsImage = results.length > 0 && results[0].result.startsWith('data:image/');
+        if (!fanOutIsImage) {
+          const combined = results.map((r) => r.result).join('\n---\n');
+          await db.ref(`boards/${boardId}/objects/${objectId}`).update({ promptOutput: combined });
+        }
+        const combined = fanOutIsImage ? '' : results.map((r) => r.result).join('\n---\n');
+
+        // Route output through output pills + wires
+        const outgoingWires = Object.values(wires).filter(
+          (w) => w.fromObjectId === objectId && !usedIncomingWireIds.has(w.id),
+        );
+
+        if (outgoingWires.length > 0) {
+          // Fan-out through wires: for 'create' mode, one sticky per line below target;
+          // for 'update'/'append', send combined result.
+          const assignedWireIds = new Set<string>();
+          for (const outPill of outPills) {
+            const matched = outgoingWires.filter((w) => Number(w.fromNode) === Number(outPill.node));
+            const mode = outPill.outputMode ?? 'update';
+            for (const wire of matched) {
+              assignedWireIds.add(wire.id);
+              if (mode === 'create') {
+                // Read all objects for collision detection
+                const allObjSnap = await db.ref(`boards/${boardId}/objects`).get();
+                const allObjs = Object.values((allObjSnap.val() ?? {}) as Record<string, BoardObject>);
+                for (let r = 0; r < results.length; r++) {
+                  const res = await routeOutputToTarget(db, boardId, wire.toObjectId, results[r].result, 'create', {
+                    sourceObjectId: objectId, runStamp, wireIdSlug: `w${wire.id.slice(0, 4)}-r${r}`,
+                    userId: req.userId, now, stickyIndex: stickiesCreated,
+                    color: STICKY_COLORS[stickiesCreated % STICKY_COLORS.length],
+                    label: results[r].label, allObjects: allObjs, fanOutSource: objectId,
+                    noteIdPrefix: 'apiresult',
+                  });
+                  if (res.stickyCreated && res.newObject) {
+                    allObjs.push(res.newObject);
+                    stickiesCreated++;
+                  }
+                }
+              } else {
+                await routeOutputToTarget(db, boardId, wire.toObjectId, combined, mode, {
+                  sourceObjectId: objectId, runStamp, wireIdSlug: wire.id.slice(0, 4),
+                  userId: req.userId, now, stickyIndex: stickiesCreated, noteIdPrefix: 'apiresult',
+                });
+              }
+            }
+          }
+
+          // Fallback: unmatched outgoing wires
+          const unmatchedWires = outgoingWires.filter((w) => !assignedWireIds.has(w.id));
+          for (const wire of unmatchedWires) {
+            await routeOutputToTarget(db, boardId, wire.toObjectId, combined, 'update', {
+              sourceObjectId: objectId, runStamp, wireIdSlug: wire.id.slice(0, 4),
+              userId: req.userId, now, stickyIndex: stickiesCreated,
+            });
+          }
+        } else if (fanOutIsImage) {
+          // No outgoing wires + image results — create image objects below the API node
+          const imgSize = 256;
+          const imgGap = INNER_GAP;
+          const startX = obj.x ?? 0;
+          const startY = (obj.y ?? 0) + (obj.height ?? STICKY_HEIGHT) + imgGap;
+
+          for (let r = 0; r < results.length; r++) {
+            const noteId = `apiresult-${objectId}-${runStamp}-r${r}`;
+            await db.ref(`boards/${boardId}/objects/${noteId}`).set({
+              id: noteId, type: 'image',
+              x: startX + r * (imgSize + imgGap), y: startY,
+              width: imgSize, height: imgSize,
+              imageData: results[r].result,
+              createdBy: req.userId, createdAt: now + stickiesCreated + 1,
+              fanOutSource: objectId,
+            });
+            stickiesCreated++;
+          }
+        } else {
+          // No outgoing wires — create a fan-out grid below the API node
+          const frameW = FRAME_PAD * 2 + STICKY_WIDTH;
+          const frameH = FRAME_PAD * 2 + results.length * STICKY_HEIGHT + (results.length - 1) * INNER_GAP;
+          const frameX = obj.x ?? 0;
+          const frameY = (obj.y ?? 0) + (obj.height ?? STICKY_HEIGHT) + INNER_GAP;
+          const frameId = `fanframe-${objectId}-${runStamp}`;
+
+          await db.ref(`boards/${boardId}/objects/${frameId}`).set({
+            id: frameId, type: 'frame',
+            x: frameX, y: frameY, width: frameW, height: frameH,
+            color: '#3a3a3a', text: '', sentToBack: true,
+            createdBy: req.userId, createdAt: now, fanOutSource: objectId,
+          });
+
+          for (let r = 0; r < results.length; r++) {
+            const noteId = `apiresult-${objectId}-${runStamp}-r${r}`;
+            const noteColor = STICKY_COLORS[stickiesCreated % STICKY_COLORS.length];
+            const noteX = frameX + FRAME_PAD;
+            const noteY = frameY + FRAME_PAD + r * (STICKY_HEIGHT + INNER_GAP);
+
+            await db.ref(`boards/${boardId}/objects/${noteId}`).set({
+              id: noteId, type: 'stickyNote',
+              x: noteX, y: noteY, width: STICKY_WIDTH, height: STICKY_HEIGHT,
+              color: noteColor, text: results[r].label, promptOutput: results[r].result,
+              createdBy: req.userId, createdAt: now + stickiesCreated + 1,
+              fanOutSource: objectId, frameId,
+            });
+            stickiesCreated++;
+          }
+        }
+
+        await updateRunStatus(db, boardId, objectId, 'success');
+        return { success: true, output: `Fan-out: ${results.length} API calls (${stickiesCreated} stickies)` };
+      }
+
+      // --- Single API call (no fan-out) ---
+      console.log(`[promptRunner] API node: ${apiId}, params:`, baseParams);
+      const formattedResult = await executeApi(baseParams);
 
       console.log(`[promptRunner] API result: ${formattedResult.slice(0, 100)}`);
 
-      // Store the result on the API node itself (promptOutput)
-      await db.ref(`boards/${boardId}/objects/${objectId}`).update({
-        promptOutput: formattedResult,
-      });
+      // Detect if result is an image (base64 data URL)
+      const isImageResult = formattedResult.startsWith('data:image/');
+
+      // Store the result on the API node itself (promptOutput or imageData)
+      if (isImageResult) {
+        await db.ref(`boards/${boardId}/objects/${objectId}`).update({ imageData: formattedResult });
+      } else {
+        await db.ref(`boards/${boardId}/objects/${objectId}`).update({ promptOutput: formattedResult });
+      }
 
       // Route output through output pills + wires (same pattern as LLM nodes)
       const outgoingWires = Object.values(wires).filter(
         (w) => w.fromObjectId === objectId && !usedIncomingWireIds.has(w.id),
       );
-
-      const now = Date.now();
-      const runStamp = now.toString(36);
-      let stickiesCreated = 0;
 
       // Match outgoing wires to output pills by node number
       const assignedWireIds = new Set<string>();
@@ -439,6 +678,14 @@ export async function runPromptNode(req: RunPromptRequest): Promise<{ success: b
         const mode = outPill.outputMode ?? 'update';
         for (const wire of matched) {
           assignedWireIds.add(wire.id);
+          // Version snapshot on target before routing (best-effort)
+          try {
+            const targetSnap = await db.ref(`boards/${boardId}/objects/${wire.toObjectId}`).get();
+            if (targetSnap.exists()) {
+              const target = targetSnap.val() as BoardObject;
+              await pushVersion(db, boardId, wire.toObjectId, target.text ?? null, target.promptOutput ?? null, 'wire_update', req.userId);
+            }
+          } catch { /* versioning is best-effort */ }
           const result = await routeOutputToTarget(db, boardId, wire.toObjectId, formattedResult, mode, {
             sourceObjectId: objectId, runStamp, wireIdSlug: wire.id.slice(0, 4),
             userId: req.userId, now, stickyIndex: stickiesCreated, noteIdPrefix: 'apiresult',
@@ -456,17 +703,28 @@ export async function runPromptNode(req: RunPromptRequest): Promise<{ success: b
         });
       }
 
-      // If no outgoing wires at all, create a result sticky below the API node
+      // If no outgoing wires at all, create a result object below the API node
       if (outgoingWires.length === 0) {
         const resultId = `apiresult-${objectId}-${runStamp}`;
         const resultX = obj.x ?? 0;
         const resultY = (obj.y ?? 0) + (obj.height ?? STICKY_HEIGHT) + INNER_GAP;
-        await db.ref(`boards/${boardId}/objects/${resultId}`).set({
-          id: resultId, type: 'stickyNote',
-          x: resultX, y: resultY, width: STICKY_WIDTH, height: STICKY_HEIGHT,
-          color: '#98b8d8', text: '', promptOutput: formattedResult,
-          createdBy: req.userId, createdAt: now,
-        });
+
+        if (isImageResult) {
+          // Create an image object for image generation results
+          await db.ref(`boards/${boardId}/objects/${resultId}`).set({
+            id: resultId, type: 'image',
+            x: resultX, y: resultY, width: 256, height: 256,
+            imageData: formattedResult,
+            createdBy: req.userId, createdAt: now,
+          });
+        } else {
+          await db.ref(`boards/${boardId}/objects/${resultId}`).set({
+            id: resultId, type: 'stickyNote',
+            x: resultX, y: resultY, width: STICKY_WIDTH, height: STICKY_HEIGHT,
+            color: '#98b8d8', text: '', promptOutput: formattedResult,
+            createdBy: req.userId, createdAt: now,
+          });
+        }
       }
 
       // Update prompt node status
@@ -653,7 +911,10 @@ export async function runPromptNode(req: RunPromptRequest): Promise<{ success: b
       return new Map([['_result', text]]);
     });
 
-    // 12. Output routing — route through wires when available, else create under prompt node.
+    // 12. Version snapshot before LLM output replaces content (best-effort)
+    try { await pushVersion(db, boardId, objectId, obj.text ?? null, obj.promptOutput ?? null, 'prompt_run', req.userId); } catch { /* versioning is best-effort */ }
+
+    // 13. Output routing — route through wires when available, else create under prompt node.
     const promptX = obj.x ?? 0;
     const promptY = obj.y ?? 0;
     const promptH = obj.height ?? STICKY_HEIGHT;

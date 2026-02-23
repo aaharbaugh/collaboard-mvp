@@ -3,6 +3,7 @@ import type { BoardObject, Wire, PillRef } from '../types/board';
 import { computeTextLayout } from '../lib/textParser';
 import { PillEditor } from '../features/wiring/PillEditor';
 import type { PromptDataSnapshot } from '../features/wiring/PillEditor';
+import { VersionPanel } from '../features/versioning/VersionPanel';
 
 const DRAFT_PERSIST_DEBOUNCE_MS = 400;
 
@@ -25,6 +26,10 @@ interface TextEditingOverlayProps {
   latestPromptDataRef?: React.MutableRefObject<PromptDataSnapshot | null>;
   /** Callback to set apiConfig on an object (triggered by >> API lookup in PillEditor) */
   onSetApiConfig?: (id: string, apiId: string) => void;
+  /** Board ID for version history */
+  boardId?: string;
+  /** Current user ID for version history */
+  userId?: string;
 }
 
 export function TextEditingOverlay({
@@ -35,13 +40,14 @@ export function TextEditingOverlay({
   onCancel,
   onDraftChange,
   latestDraftRef,
-  wires,
-  objects,
+  wires: _wires,
+  objects: _objects,
   onSavePromptData,
   latestPromptDataRef,
   onSetApiConfig,
+  boardId,
+  userId,
 }: TextEditingOverlayProps) {
-  const isFrame = obj?.type === 'frame';
   // Non-prompt result stickies display promptOutput; use it as the editable text
   const getDisplayText = (o: BoardObject | null) => {
     if (!o) return '';
@@ -52,6 +58,7 @@ export function TextEditingOverlay({
   const [text, setText] = useState(
     () => initialDraft !== undefined ? initialDraft : getDisplayText(obj)
   );
+  const [showVersionPanel, setShowVersionPanel] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement | HTMLInputElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const openedIdRef = useRef<string | null>(null);
@@ -64,6 +71,7 @@ export function TextEditingOverlay({
     }
     if (openedIdRef.current !== obj.id) {
       openedIdRef.current = obj.id;
+      setShowVersionPanel(false);
       const next = initialDraft !== undefined ? initialDraft : getDisplayText(obj);
       setText(next);
       if (latestDraftRef) latestDraftRef.current = next;
@@ -183,7 +191,7 @@ export function TextEditingOverlay({
   }
 
   const minScreenDim = Math.min(screenW, screenH);
-  const layout = computeTextLayout(text, Math.max(1, obj.width), Math.max(1, obj.height), { maxFontSize: 16 });
+  const layout = computeTextLayout(text, Math.max(1, obj.width), Math.max(1, obj.height), { maxFontSize: 20 });
   const screenFontSize = layout.fontSize * scale;
   const screenPadding = layout.padding * scale;
 
@@ -290,7 +298,37 @@ export function TextEditingOverlay({
               color: '#2c2416',
             }}
           />
+          {(obj.versionCount ?? 0) > 0 && boardId && userId && (
+            <button
+              onClick={() => setShowVersionPanel((v) => !v)}
+              style={{
+                position: 'absolute',
+                left: 4,
+                bottom: 4,
+                background: showVersionPanel ? '#4a7c59' : '#333',
+                border: '1px solid #555',
+                color: '#ccc',
+                cursor: 'pointer',
+                fontSize: 10,
+                padding: '2px 8px',
+                borderRadius: 3,
+                fontFamily: '"Courier New", Courier, monospace',
+                zIndex: 2,
+              }}
+              title="Version history"
+            >
+              History ({obj.versionCount})
+            </button>
+          )}
         </div>
+        {showVersionPanel && boardId && userId && (
+          <VersionPanel
+            boardId={boardId}
+            objectId={obj.id}
+            userId={userId}
+            onClose={() => setShowVersionPanel(false)}
+          />
+        )}
       </div>
     );
   }

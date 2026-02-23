@@ -1,7 +1,9 @@
 import React from 'react';
 import { Rect, Text } from 'react-konva';
+import type Konva from 'konva';
 import type { PillRef } from '../../types/board';
 import { getApiById } from '../apiLookup/apiRegistry';
+import { useBoardStore } from '../../lib/store';
 
 interface PillOverlaysProps {
   wrappedLines: string[];
@@ -15,6 +17,8 @@ interface PillOverlaysProps {
   stickyWidth?: number;
   /** Total sticky note height — used to center API blocks vertically */
   stickyHeight?: number;
+  /** Object ID — needed for API change via double-click */
+  objectId?: string;
 }
 
 /**
@@ -31,6 +35,7 @@ export const PillOverlays = React.memo(function PillOverlays({
   bgColor,
   stickyWidth,
   stickyHeight,
+  objectId,
 }: PillOverlaysProps) {
   if (!pills || pills.length === 0) return null;
 
@@ -92,13 +97,10 @@ export const PillOverlays = React.memo(function PillOverlays({
     for (const [apiId, groupPills] of groups) {
       // Find the line containing [API:xxx] marker
       let blockLineIdx = -1;
-      let blockCharIdx = -1;
       const marker = `[API:${apiId}]`;
       for (let lineIdx = 0; lineIdx < wrappedLines.length; lineIdx++) {
-        const idx = wrappedLines[lineIdx].indexOf(marker);
-        if (idx !== -1) {
+        if (wrappedLines[lineIdx].indexOf(marker) !== -1) {
           blockLineIdx = lineIdx;
-          blockCharIdx = idx;
           break;
         }
       }
@@ -216,13 +218,41 @@ export const PillOverlays = React.memo(function PillOverlays({
         />
       );
 
+      // Handler for double-clicking the API heading to change the API
+      const handleApiLabelDblClick = (e: Konva.KonvaEventObject<MouseEvent | TouchEvent>) => {
+        e.cancelBubble = true;
+        if (!objectId) return;
+        const stage = e.target.getStage();
+        if (!stage) return;
+        const pointer = stage.getPointerPosition();
+        if (!pointer) return;
+        const container = stage.container().getBoundingClientRect();
+        useBoardStore.getState().setApiChangeRequest({
+          objectId,
+          position: { x: container.left + pointer.x, y: container.top + pointer.y },
+        });
+      };
+
       // -- Render content lines --
       let curY = blockY + 2;
       const contentX = blockX + 4;
 
       for (const rl of renderedLines) {
         if (rl.isBold) {
-          // API label
+          // API label — double-click this heading to change the API
+          elements.push(
+            <Rect
+              key={`api-label-hit-${apiId}`}
+              x={blockX}
+              y={curY - 2}
+              width={blockWidth}
+              height={lineHeight + 2}
+              fill="transparent"
+              listening={true}
+              onDblClick={handleApiLabelDblClick}
+              onDblTap={handleApiLabelDblClick}
+            />
+          );
           elements.push(
             <Text
               key={`api-block-label-${apiId}`}

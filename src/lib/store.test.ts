@@ -30,4 +30,18 @@ describe('useBoardStore', () => {
     useBoardStore.getState().setViewport({ x: 10, y: 20 });
     expect(useBoardStore.getState().viewport).toEqual({ x: 10, y: 20, scale: 2 });
   });
+
+  it('drawingConnection starts null and can be set/cleared', () => {
+    expect(useBoardStore.getState().drawingConnection).toBeNull();
+    useBoardStore.getState().setDrawingConnection({
+      fromObjectId: 'obj1',
+      fromAnchor: 'right',
+      currentPoint: { x: 100, y: 200 },
+      waypoints: [],
+    });
+    expect(useBoardStore.getState().drawingConnection).not.toBeNull();
+    expect(useBoardStore.getState().drawingConnection!.fromAnchor).toBe('right');
+    useBoardStore.getState().setDrawingConnection(null);
+    expect(useBoardStore.getState().drawingConnection).toBeNull();
+  });
 });

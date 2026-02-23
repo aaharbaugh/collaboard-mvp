@@ -39,7 +39,7 @@ export function TextElement({
   const h = Math.max(0, obj.height);
   const screenW = w * zoomScale;
 
-  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), { maxFontSize: 16 });
+  const layout = computeTextLayout(rawText, Math.max(1, w), Math.max(1, h), { maxFontSize: 20 });
   const { fontSize, padding, wrappedLines } = layout;
   const lineHeight = fontSize * LINE_HEIGHT_RATIO;
 
@@ -91,6 +91,7 @@ export function TextElement({
               fontSize={fontSize}
               padding={padding}
               lineHeight={lineHeight}
+              objectId={obj.id}
             />
           )}
         </>

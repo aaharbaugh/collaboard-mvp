@@ -58,4 +58,4 @@ export const FRAME_DEFAULTS = {
 export const FRAME_STROKE = '#5a5048';
 export const FRAME_FILL = 'rgba(50, 85, 55, 0.09)';
 export const FRAME_TITLE_COLOR = '#4a4035';
-export const CONNECTION_DEFAULT_COLOR = '#5a5044';
+export const CONNECTION_DEFAULT_COLOR = '#000000';

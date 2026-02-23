@@ -47,7 +47,7 @@ export function getWireMidpointScreen(
   const dx = to.x - from.x;
   const dy = to.y - from.y;
   const dist = Math.sqrt(dx * dx + dy * dy);
-  const offset = Math.max(40 / viewport.scale, dist * 0.3);
+  const offset = Math.max(Math.min(40 / viewport.scale, dist * 0.5), dist * 0.3);
 
   const fromPill = fromObj.pills?.find((p) => p.node === wire.fromNode);
   const toPill = toObj.pills?.find((p) => p.node === wire.toNode);

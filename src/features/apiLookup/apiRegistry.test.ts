@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { API_REGISTRY, getApiById, filterApis } from './apiRegistry';
 
 describe('API_REGISTRY', () => {
-  it('contains 8 API definitions', () => {
-    expect(API_REGISTRY).toHaveLength(8);
+  it('contains 16 API definitions (8 original + 7 transforms + 1 image)', () => {
+    expect(API_REGISTRY).toHaveLength(16);
   });
 
   it('each entry has id, name, category, description, icon, and params fields', () => {
